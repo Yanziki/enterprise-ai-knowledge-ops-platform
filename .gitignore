@@ -1,0 +1,18 @@
+# Local environment
+.env
+.DS_Store
+
+# Java
+target/
+.mvn/timing.properties
+
+# JavaScript
+node_modules/
+dist/
+coverage/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
