@@ -36,7 +36,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - wget --quiet --output-document=- http://127.0.0.1:8080/actuator/health/readiness | grep --quiet '"status":"UP"'
+        - wget -qO- http://127.0.0.1:8080/actuator/health/readiness | grep -q '"status":"UP"'
       interval: 10s
       timeout: 5s
       retries: 12
@@ -61,7 +61,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - wget --quiet --output-document=- http://127.0.0.1:8080/healthz | grep --quiet healthy
+        - wget -qO- http://127.0.0.1:8080/healthz | grep -q healthy
       interval: 10s
       timeout: 5s
       retries: 6
