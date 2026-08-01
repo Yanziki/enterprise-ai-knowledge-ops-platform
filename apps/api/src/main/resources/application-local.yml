@@ -1,0 +1,10 @@
+app:
+  database:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/enterprise_ai}
+    username: ${DB_USERNAME:enterprise_ai}
+    password: ${DB_PASSWORD:enterprise_ai_dev_only}
+
+logging:
+  level:
+    root: INFO
+    io.github.yanziki.enterpriseai: DEBUG

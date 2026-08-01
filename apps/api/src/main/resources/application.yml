@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: enterprise-ai-api
+  profiles:
+    default: local
+  datasource:
+    url: ${app.database.url}
+    username: ${app.database.username}
+    password: ${app.database.password}
+    hikari:
+      initialization-fail-timeout: 10000
+      maximum-pool-size: 10
+      minimum-idle: 1
+  flyway:
+    enabled: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+app:
+  database:
+    url: ${DB_URL:}
+    username: ${DB_USERNAME:}
+    password: ${DB_PASSWORD:}
+
+application:
+  version: "@project.version@"
+
+server:
+  port: ${SERVER_PORT:8081}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
