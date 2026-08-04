@@ -1,0 +1,272 @@
+:root {
+  color: #eef2f3;
+  background: #07100f;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 72% 8%, rgb(27 94 78 / 28%), transparent 35rem),
+    linear-gradient(160deg, #07100f 0%, #0a1314 52%, #08100f 100%);
+}
+
+a {
+  color: inherit;
+}
+
+.site-shell {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+}
+
+.site-header,
+footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 80px;
+  color: #aebbb8;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.site-header {
+  border-bottom: 1px solid #20302d;
+}
+
+.brand {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid #4b756a;
+  border-radius: 50%;
+  color: #dbfff3;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.hero {
+  display: grid;
+  min-height: 620px;
+  align-content: center;
+  padding: 80px 0 96px;
+}
+
+.eyebrow {
+  margin: 0 0 22px;
+  color: #72d5b7;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  max-width: 900px;
+  margin-bottom: 28px;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(3rem, 7vw, 6.3rem);
+  font-weight: 400;
+  letter-spacing: -0.05em;
+  line-height: 0.98;
+}
+
+.hero-copy {
+  max-width: 650px;
+  margin-bottom: 48px;
+  color: #aebbb8;
+  font-size: clamp(1rem, 2vw, 1.2rem);
+  line-height: 1.7;
+}
+
+.status-panel {
+  display: flex;
+  width: min(100%, 690px);
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 20px;
+  border: 1px solid #263a36;
+  border-radius: 4px;
+  background: rgb(11 27 24 / 72%);
+}
+
+.status-panel > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #78908a;
+  box-shadow: 0 0 0 5px rgb(120 144 138 / 10%);
+}
+
+.status-dot--online {
+  background: #72d5b7;
+  box-shadow: 0 0 0 5px rgb(114 213 183 / 12%);
+}
+
+.status-dot--unavailable {
+  background: #f08f7a;
+  box-shadow: 0 0 0 5px rgb(240 143 122 / 12%);
+}
+
+.status-label {
+  font-weight: 650;
+}
+
+.service-version {
+  color: #849691;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+.modules {
+  padding: 96px 0 120px;
+  border-top: 1px solid #20302d;
+}
+
+.section-heading {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  margin-bottom: 52px;
+}
+
+h2 {
+  max-width: 620px;
+  margin-bottom: 0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(2rem, 4vw, 3.6rem);
+  font-weight: 400;
+  letter-spacing: -0.035em;
+  line-height: 1.08;
+}
+
+.module-grid {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  grid-template-columns: repeat(4, 1fr);
+  list-style: none;
+}
+
+.module-card {
+  min-height: 270px;
+  padding: 26px;
+  border-top: 1px solid #355149;
+  border-right: 1px solid #20302d;
+}
+
+.module-card:last-child {
+  border-right: 0;
+}
+
+.module-number,
+.planned {
+  color: #68837c;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.module-card h3 {
+  margin: 62px 0 14px;
+  font-size: 1.15rem;
+}
+
+.module-card p {
+  min-height: 68px;
+  color: #91a29d;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.planned {
+  color: #72d5b7;
+}
+
+footer {
+  border-top: 1px solid #20302d;
+}
+
+@media (max-width: 760px) {
+  .site-shell {
+    width: min(100% - 28px, 1180px);
+  }
+
+  .hero {
+    min-height: 540px;
+    padding: 64px 0;
+  }
+
+  .status-panel,
+  .section-heading,
+  footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .section-heading {
+    display: flex;
+    gap: 8px;
+  }
+
+  .module-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .module-card {
+    min-height: 220px;
+    border-right: 0;
+  }
+
+  .module-card h3 {
+    margin-top: 36px;
+  }
+
+  footer {
+    justify-content: center;
+    gap: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
