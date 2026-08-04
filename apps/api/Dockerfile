@@ -8,7 +8,7 @@ RUN ./mvnw -B -ntp dependency:go-offline
 COPY src src
 RUN ./mvnw -B -ntp package -DskipTests
 
-FROM amazoncorretto:21.0.12-alpine AS runtime
+FROM amazoncorretto:26.0.2-alpine AS runtime
 RUN addgroup -S app && adduser -S -G app app
 WORKDIR /app
 COPY --from=build --chown=app:app /workspace/target/enterprise-ai-api-0.1.0-SNAPSHOT.jar app.jar
