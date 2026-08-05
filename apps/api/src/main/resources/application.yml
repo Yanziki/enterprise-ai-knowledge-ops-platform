@@ -23,6 +23,10 @@ app:
     url: ${DB_URL:}
     username: ${DB_USERNAME:}
     password: ${DB_PASSWORD:}
+  identity:
+    issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8082/realms/enterprise-ai}
+    jwk-set-uri: ${OIDC_JWK_SET_URI:http://localhost:8082/realms/enterprise-ai/protocol/openid-connect/certs}
+    audience: ${OIDC_AUDIENCE:enterprise-ai-api}
 
 application:
   version: "@project.version@"
