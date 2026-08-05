@@ -3,7 +3,8 @@
 ## System context
 
 The platform sits between enterprise users and approved enterprise knowledge or
-operations systems. Day 1 implements only the web, API, and database boundary.
+operations systems. Day 2 adds a local OIDC identity provider and an explicit
+authenticated-user and tenant-authorization boundary.
 
 ```mermaid
 flowchart LR
@@ -21,19 +22,24 @@ Dashed connections are planned dependencies, not implemented integrations.
 
 ```mermaid
 flowchart TB
-  Browser["Browser"] -->|"HTTP :8080"| Web["Nginx + React web"]
+  Browser["Browser"] -->|"OIDC Authorization Code + PKCE"| IdP["Keycloak local IdP"]
+  IdP -->|"signed tokens"| Browser
+  Browser -->|"HTTP :8080 + bearer token"| Web["Nginx + React web"]
   Web -->|"same-origin /api and /actuator"| API["Spring Boot API"]
+  API -->|"issuer discovery and JWK validation"| IdP
   API -->|"JDBC/TLS in production"| DB[("PostgreSQL 17 + pgvector")]
 
   subgraph Host["Docker Compose network"]
     Web
     API
     DB
+    IdP
   end
 ```
 
 The React build is static. Nginx serves it and proxies API calls, avoiding a
-wildcard CORS policy. The API owns database migrations. PostgreSQL is not
+wildcard CORS policy. Keycloak handles local authentication. The API validates
+tokens and owns database migrations and tenant authorization. PostgreSQL is not
 published to browsers.
 
 ## Trust boundaries
@@ -44,17 +50,21 @@ published to browsers.
    secure by default and denies unspecified endpoints.
 3. **API to database:** credentials arrive through environment configuration.
    Production must use distinct least-privilege roles and encrypted transport.
-4. **Tenant boundary (planned):** every future data access must carry verified
-   tenant context and be tested against confused-deputy and cross-tenant risks.
-5. **Model/tool boundary (planned):** prompts, retrieved content, tool arguments,
+4. **Identity-provider to API:** token payloads become trusted only after signature,
+   issuer, expiry, and audience validation. Provider roles do not replace database
+   tenant memberships.
+5. **Tenant boundary:** the API derives tenant access from the validated subject
+   and current database membership. Request-supplied slugs are selectors, not
+   authorization context. Cross-tenant negative tests are mandatory.
+6. **Model/tool boundary (planned):** prompts, retrieved content, tool arguments,
    and outputs are untrusted data subject to authorization and audit controls.
 
 ## Planned external dependencies
 
-- Identity provider using OIDC/OAuth 2.0.
 - Approved object storage and enterprise document sources.
 - Approved embedding and language-model providers.
 - Observability backend for metrics, traces, logs, and alerts.
 - Enterprise operations systems exposed through human-approved tools.
 
-None of these external dependencies is connected in Day 1.
+Keycloak is connected only as synthetic local development infrastructure. The
+remaining external dependencies are still planned and disconnected.
