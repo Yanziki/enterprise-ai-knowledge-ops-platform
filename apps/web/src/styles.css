@@ -34,6 +34,15 @@ a {
   color: inherit;
 }
 
+button,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
 .site-shell {
   width: min(1180px, calc(100% - 40px));
   margin: 0 auto;
@@ -53,6 +62,12 @@ footer {
 
 .site-header {
   border-bottom: 1px solid #20302d;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
 }
 
 .brand {
@@ -109,6 +124,43 @@ h1 {
   line-height: 1.7;
 }
 
+.primary-action,
+.secondary-action,
+.text-action {
+  border: 0;
+  font-weight: 700;
+}
+
+.primary-action,
+.secondary-action {
+  width: fit-content;
+  padding: 14px 20px;
+  border-radius: 3px;
+}
+
+.primary-action {
+  margin-bottom: 28px;
+  color: #07100f;
+  background: #72d5b7;
+}
+
+.primary-action:hover,
+.primary-action:focus-visible {
+  background: #9ce7d0;
+}
+
+.secondary-action {
+  color: #dbfff3;
+  background: #204b41;
+}
+
+.text-action {
+  padding: 8px 0;
+  color: #72d5b7;
+  background: transparent;
+  text-transform: uppercase;
+}
+
 .status-panel {
   display: flex;
   width: min(100%, 690px);
@@ -158,6 +210,146 @@ h1 {
 .modules {
   padding: 96px 0 120px;
   border-top: 1px solid #20302d;
+}
+
+.dashboard {
+  padding: 72px 0 0;
+}
+
+.dashboard-intro {
+  max-width: 880px;
+  padding: 38px 0 68px;
+}
+
+.dashboard-intro h1,
+.message-panel h1 {
+  font-size: clamp(2.8rem, 6vw, 5.4rem);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 72px;
+}
+
+.data-card,
+.tenant-panel {
+  border: 1px solid #29413b;
+  border-radius: 5px;
+  background: rgb(11 27 24 / 78%);
+}
+
+.data-card {
+  min-height: 310px;
+  padding: 28px;
+}
+
+.data-card--admin {
+  border-color: #766235;
+  background: rgb(48 39 17 / 44%);
+}
+
+.card-label {
+  margin-bottom: 36px;
+  color: #72d5b7;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.data-card h2 {
+  margin-bottom: 28px;
+  font-size: 1.8rem;
+}
+
+dl {
+  margin: 0;
+}
+
+dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 0;
+  border-top: 1px solid #29413b;
+}
+
+dt {
+  color: #849691;
+}
+
+dd {
+  margin: 0;
+  text-align: right;
+}
+
+.membership-list {
+  display: grid;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.membership-list li {
+  display: grid;
+  gap: 6px;
+  padding-top: 14px;
+  border-top: 1px solid #29413b;
+}
+
+.membership-list span,
+.tenant-panel p {
+  color: #91a29d;
+  line-height: 1.55;
+}
+
+.tenant-panel {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: 64px;
+  margin-bottom: 96px;
+  padding: 36px;
+}
+
+.tenant-controls {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.tenant-controls label {
+  color: #aebbb8;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tenant-controls select {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #355149;
+  border-radius: 3px;
+  color: #eef2f3;
+  background: #0b1b18;
+}
+
+.result {
+  color: #72d5b7 !important;
+}
+
+.error-message {
+  color: #f08f7a !important;
+}
+
+.message-panel {
+  display: grid;
+  min-height: 70vh;
+  align-content: center;
+  justify-items: start;
 }
 
 .section-heading {
@@ -239,6 +431,22 @@ footer {
   footer {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .header-actions {
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .dashboard-grid,
+  .tenant-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .tenant-panel {
+    gap: 28px;
+    padding: 24px;
   }
 
   .section-heading {
