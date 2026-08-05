@@ -8,8 +8,8 @@ const authority =
 export const oidcConfig: AuthProviderProps = {
   authority,
   client_id: 'enterprise-ai-web',
-  redirect_uri: window.location.origin,
-  post_logout_redirect_uri: window.location.origin,
+  redirect_uri: `${window.location.origin}/`,
+  post_logout_redirect_uri: `${window.location.origin}/`,
   response_type: 'code',
   scope: 'openid profile email',
   automaticSilentRenew: false,

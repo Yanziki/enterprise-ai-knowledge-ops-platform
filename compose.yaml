@@ -21,6 +21,32 @@ services:
       - platform
     restart: unless-stopped
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:?KEYCLOAK_ADMIN must be set}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD must be set}
+      KC_HEALTH_ENABLED: "true"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 &&
+          grep -q "200 OK" <&3'
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+    volumes:
+      - ./infra/keycloak/realm-enterprise-ai.json:/opt/keycloak/data/import/realm-enterprise-ai.json:ro
+    ports:
+      - "${KEYCLOAK_PORT:-8082}:8080"
+    networks:
+      - platform
+    restart: unless-stopped
+
   api:
     build:
       context: ./apps/api
@@ -30,8 +56,13 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
       DB_USERNAME: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
+      OIDC_ISSUER_URI: ${OIDC_ISSUER_URI:-http://localhost:8082/realms/enterprise-ai}
+      OIDC_JWK_SET_URI: http://keycloak:8080/realms/enterprise-ai/protocol/openid-connect/certs
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-enterprise-ai-api}
     depends_on:
       postgres:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
     healthcheck:
       test:
@@ -57,6 +88,8 @@ services:
       dockerfile: apps/web/Dockerfile
     depends_on:
       api:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
     healthcheck:
       test:
