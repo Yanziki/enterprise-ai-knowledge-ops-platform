@@ -2,12 +2,13 @@
 
 A production-oriented foundation for turning governed enterprise knowledge into
 traceable, human-supervised operations. The platform is being built as a secure
-modular monolith with a Spring Boot API, React web client, and PostgreSQL with
-pgvector.
+modular monolith with a Spring Boot API, React web client, PostgreSQL with
+pgvector, and standards-based identity.
 
-> **Current milestone: Foundation.** This repository contains no production AI
-> functionality yet. There are no LLM calls, embeddings, retrieval, RAG, chat,
-> MCP tools, authentication flows, or business workflows in Day 1.
+> **Current milestone: Identity and tenant isolation.** Day 2 adds a
+> production-oriented local identity foundation, not production-ready identity.
+> There is still no production AI functionality, document ingestion, retrieval,
+> chat, MCP server, or business workflow implementation.
 
 ## Problem statement
 
@@ -18,28 +19,43 @@ before those capabilities are introduced.
 
 ## Architecture overview
 
-- `apps/api`: Java 21 and Spring Boot 4.1 API with secure-by-default routing.
-- `apps/web`: React 19.2 and TypeScript single-page application.
-- `postgres`: PostgreSQL 17 with the pgvector extension enabled by Flyway.
-- `infra/nginx`: same-origin production frontend and API reverse proxy.
-- `docs`: product, architecture, security, ADR, and runbook documentation.
+- `apps/api`: Java 21 and Spring Boot 4.1 resource server. It validates JWT
+  signature, issuer, audience, expiry, and an allowlist of realm roles before
+  resolving the token subject to a local user profile and membership.
+- `apps/web`: React 19.2 and TypeScript single-page application using OIDC
+  Authorization Code Flow with PKCE. Tokens remain in tab-scoped session
+  storage and are sent through one typed bearer-token API client.
+- `postgres`: PostgreSQL 17 with pgvector, Flyway-managed organizations,
+  workspaces, user profiles, and memberships, plus database constraints and
+  indexes supporting tenant checks.
+- `keycloak`: pinned Keycloak 26.7.0 development container with a deterministic
+  imported realm, public web client, API audience, and synthetic users.
+- `infra/nginx`: same-origin frontend and API reverse proxy.
+- `docs`: product, architecture, security, ADR, and operational documentation.
 
-See [system context](docs/architecture/context.md) and the
-[technology stack](docs/architecture/technology-stack.md).
+Identity-provider roles and application memberships are deliberately separate:
+realm roles answer what a principal may do, while PostgreSQL memberships answer
+where they may do it. Server-side tenant authorization is applied even when the
+frontend offers only authorized organizations.
+
+See the [system context](docs/architecture/context.md),
+[technology stack](docs/architecture/technology-stack.md),
+[OIDC ADR](docs/adr/0003-use-oidc-identity-provider.md), and
+[identity threat model](docs/security/identity-threat-model.md).
 
 ## Repository structure
 
 ```text
-apps/api/                 Spring Boot API and tests
-apps/web/                 React application and tests
-infra/docker/             Container-related documentation
-infra/nginx/              Production Nginx configuration
+apps/api/                 Spring Boot API and integration tests
+apps/web/                 React application and frontend tests
+infra/keycloak/           Development realm import
+infra/nginx/              Production-style Nginx configuration
 docs/product/             Product direction and policies
 docs/architecture/        Architecture views and technology choices
 docs/adr/                 Architecture decision records
-docs/security/            Security baseline
+docs/security/            Security baseline and threat models
 docs/runbooks/            Operational procedures
-scripts/                  Repository automation entry point
+scripts/                  Repository verification scripts
 .github/                  Governance, CI, and dependency automation
 ```
 
@@ -53,32 +69,95 @@ scripts/                  Repository automation entry point
 Maven is provided through `apps/api/mvnw`. JavaScript dependencies are locked
 with `apps/web/pnpm-lock.yaml`.
 
-## Quick start
+## Local login
+
+Start the complete identity-enabled stack:
 
 ```bash
 cp .env.example .env
-docker compose up --build
+docker compose up --build --detach --wait
 ```
 
-Open <http://localhost:8080>. The frontend calls the real API through Nginx and
-reports backend status and service version.
+Open <http://localhost:8080>, select **Log in with Keycloak**, and use one of
+these development-only accounts:
 
-For host-based development and troubleshooting, follow the
-[local development runbook](docs/runbooks/local-development.md).
+| Account | Password | Realm role | Application membership |
+| --- | --- | --- | --- |
+| `admin@example.com` | `AdminDevOnly123!` | `PLATFORM_ADMIN` | `TENANT_ADMIN` in Acme |
+| `member@example.com` | `MemberDevOnly123!` | `MEMBER` | `MEMBER` in Acme |
+| `other@example.com` | `OtherDevOnly123!` | `MEMBER` | `MEMBER` in Globex |
+
+These credentials and the direct-grant smoke client are synthetic local/CI
+fixtures. Never reuse them or this Keycloak configuration in production.
+
+The member dashboard exposes only its authorized organization:
+
+![Authenticated Acme member dashboard](docs/assets/day-2-member-dashboard.jpg)
+
+The platform-admin role additionally unlocks a protected system summary:
+
+![Authenticated platform-admin dashboard](docs/assets/day-2-admin-dashboard.jpg)
+
+## Authorization behavior
+
+- `/api/v1/system/status` and Actuator health probes remain public.
+- `/api/v1/me` returns the authenticated local profile, allowlisted platform
+  roles, organization memberships, and workspaces. An unknown token subject is
+  denied instead of being auto-provisioned.
+- `/api/v1/admin/system-summary` requires `PLATFORM_ADMIN`; an authenticated
+  member receives `403 Forbidden`.
+- `/api/v1/organizations/{slug}/summary` requires a matching organization
+  membership unless the principal is a platform admin.
+- Missing, expired, invalidly signed, wrong-issuer, or wrong-audience bearer
+  tokens receive `401 Unauthorized`.
+
+Run the live tenant-isolation demonstration after the stack is healthy:
+
+```bash
+make identity-verify
+```
+
+The verifier obtains short-lived synthetic tokens without printing them and
+proves unauthenticated `401`, role-based `403`, authorized Acme/Globex access,
+and denial in both cross-tenant directions.
 
 ## Verification
 
-```bash
-make verify
+Run the repository test suites and static checks:
 
+```bash
 cd apps/api && ./mvnw verify
-cd apps/web && pnpm install --frozen-lockfile
-cd apps/web && pnpm lint && pnpm test --run && pnpm build
-docker compose config
+cd ../web && pnpm install --frozen-lockfile
+pnpm lint
+pnpm test --run
+pnpm build
+cd ../..
+docker compose config --quiet
+```
+
+Run the real composed identity stack:
+
+```bash
+docker compose up --build --detach --wait
+docker compose ps
+make identity-verify
 ```
 
 Backend integration tests require a working Docker daemon because they use a
-real pgvector-enabled PostgreSQL container, never H2.
+real pgvector-enabled PostgreSQL container, never H2. CI repeats both suites,
+builds the Compose stack, checks pgvector, and runs the identity/isolation
+verifier.
+
+For host-based development, realm reset behavior, issuer checks, and 401/403
+troubleshooting, follow the
+[local development runbook](docs/runbooks/local-development.md).
+
+## Explicitly unfinished
+
+Day 2 does not implement public registration, password reset, social login,
+production identity-provider deployment, production secrets, billing, document
+upload, object storage, embeddings, vector search, RAG, chat, MCP, audit business
+workflows, Redis, Kafka, Kubernetes, or cloud deployment.
 
 ## Contribution workflow
 
@@ -95,4 +174,4 @@ checks, and the definition of done.
 5. Human-approved workflows, audit evidence, and an independent MCP server.
 6. Hardened observability and production deployment.
 
-Roadmap items describe intended direction, not completed features.
+Roadmap items describe intended direction, not completed production features.
