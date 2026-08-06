@@ -83,9 +83,10 @@ docker compose down --volumes --remove-orphans
 docker compose up --build --detach --wait
 ```
 
-The volume reset is required once after this unmerged V2 correction because its
-checksum and fixture layout changed. The removed data is synthetic local data;
-do not use `flyway repair` to conceal the mismatch.
+The volume reset is required once after this unmerged hardening because V2's
+checksum and the former V900 fixture layout changed. The removed data is
+synthetic local data; do not use `flyway repair` to conceal the mismatch or
+enable out-of-order execution.
 
 Open <http://localhost:8080>, select **Log in with Keycloak**, and use one of
 these development-only accounts:
@@ -104,8 +105,14 @@ fixtures. Never reuse them or this Keycloak configuration in production.
 The production migration location, `classpath:db/migration`, contains durable
 schema only and never creates Acme, Globex, synthetic profiles, or memberships.
 The explicit `local`, `container`, and `test` profiles additionally load
-`classpath:db/devdata`, which contains the deterministic application fixtures.
-Synthetic Keycloak users remain isolated in the local realm import.
+`classpath:db/devdata`, which contains the deterministic application fixtures as
+the idempotent repeatable migration `R__synthetic_identity_fixtures.sql`.
+Versioned migrations are reserved for durable schema evolution, so the fixture
+does not advance the schema version: Day 2 ends at V2 and future V3 and later
+migrations can be added normally. If the repeatable fixture checksum changes,
+Flyway reruns its `INSERT ... ON CONFLICT DO NOTHING` statements without deleting,
+overwriting, or duplicating existing fixture records. Synthetic application data
+and Keycloak users remain local/test-only.
 
 V2 can be corrected in this pull request because it has not been merged. After
 a Flyway migration is merged or applied outside disposable development data,
@@ -170,10 +177,11 @@ make identity-verify
 Backend integration tests require a working Docker daemon because they use a
 real pgvector-enabled PostgreSQL container, never H2. CI repeats both suites,
 builds the Compose stack, checks pgvector, and runs the identity/isolation
-verifier. That verifier also proves the local fixtures were explicitly applied,
-accepts same-organization and nullable-workspace memberships in rollback-only
-transactions, and confirms the database rejects Acme membership paired with the
-Globex Research workspace.
+verifier. That verifier also proves the repeatable local fixture was explicitly
+applied without recording version 900, confirms V2 is the latest versioned
+migration, accepts same-organization and nullable-workspace memberships in
+rollback-only transactions, and confirms the database rejects Acme membership
+paired with the Globex Research workspace.
 
 For host-based development, realm reset behavior, issuer checks, and 401/403
 troubleshooting, follow the

@@ -20,6 +20,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -33,6 +35,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -99,6 +102,8 @@ class EnterpriseAiApplicationIT {
     @Autowired private ApplicationContext applicationContext;
 
     @Autowired private Environment environment;
+
+    @Autowired private Flyway flyway;
 
     @Autowired private JdbcTemplate jdbcTemplate;
 
@@ -251,6 +256,30 @@ class EnterpriseAiApplicationIT {
                 .isEqualTo(2);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM workspaces", Integer.class))
                 .isEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM user_profiles", Integer.class))
+                .isEqualTo(3);
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM memberships", Integer.class))
+                .isEqualTo(3);
+        assertThat(
+                        jdbcTemplate.queryForObject(
+                                "SELECT COUNT(*) FROM flyway_schema_history"
+                                        + " WHERE version = '900' AND success",
+                                Integer.class))
+                .isZero();
+        assertThat(
+                        jdbcTemplate.queryForObject(
+                                "SELECT MAX(version::integer) FROM flyway_schema_history"
+                                        + " WHERE success AND version ~ '^[0-9]+$'",
+                                Integer.class))
+                .isEqualTo(2);
+        assertThat(
+                        jdbcTemplate.queryForObject(
+                                "SELECT COUNT(*) FROM flyway_schema_history"
+                                        + " WHERE version IS NULL"
+                                        + " AND description = 'synthetic identity fixtures'"
+                                        + " AND success",
+                                Integer.class))
+                .isEqualTo(1);
         assertThatThrownBy(
                         () ->
                                 jdbcTemplate.update(
@@ -292,6 +321,122 @@ class EnterpriseAiApplicationIT {
                 assertThat(queryForInt(connection, "SELECT COUNT(*) FROM workspaces")).isZero();
                 assertThat(queryForInt(connection, "SELECT COUNT(*) FROM user_profiles")).isZero();
                 assertThat(queryForInt(connection, "SELECT COUNT(*) FROM memberships")).isZero();
+                assertThat(
+                                queryForInt(
+                                        connection,
+                                        "SELECT COUNT(*) FROM flyway_schema_history"
+                                                + " WHERE version IN ('1', '2') AND success"))
+                        .isEqualTo(2);
+                assertThat(
+                                queryForInt(
+                                        connection,
+                                        "SELECT COUNT(*) FROM flyway_schema_history"
+                                                + " WHERE version = '900' AND success"))
+                        .isZero();
+                assertThat(
+                                queryForInt(
+                                        connection,
+                                        "SELECT MAX(version::integer) FROM flyway_schema_history"
+                                                + " WHERE success AND version ~ '^[0-9]+$'"))
+                        .isEqualTo(2);
+                assertThat(
+                                queryForInt(
+                                        connection,
+                                        "SELECT COUNT(*) FROM flyway_schema_history"
+                                                + " WHERE version IS NULL AND success"))
+                        .isZero();
+            }
+        }
+    }
+
+    @Test
+    void repeatableFixtureCanMigrateAgainWithoutDuplicatingRecords() {
+        assertThat(flyway.migrate().migrationsExecuted).isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM organizations", Integer.class))
+                .isEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM workspaces", Integer.class))
+                .isEqualTo(2);
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM user_profiles", Integer.class))
+                .isEqualTo(3);
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM memberships", Integer.class))
+                .isEqualTo(3);
+    }
+
+    @Test
+    void futureVersionedMigrationRunsAfterRepeatableFixture(@TempDir Path futureMigrationLocation)
+            throws Exception {
+        try (PostgreSQLContainer<?> futureMigrationPostgres =
+                new PostgreSQLContainer<>(PGVECTOR_IMAGE)
+                        .withDatabaseName("enterprise_ai_future_migration")
+                        .withUsername("enterprise_ai_future_migration")
+                        .withPassword("synthetic_future_migration_password")) {
+            futureMigrationPostgres.start();
+
+            Flyway.configure()
+                    .dataSource(
+                            futureMigrationPostgres.getJdbcUrl(),
+                            futureMigrationPostgres.getUsername(),
+                            futureMigrationPostgres.getPassword())
+                    .locations("classpath:db/migration", "classpath:db/devdata")
+                    .load()
+                    .migrate();
+
+            try (Connection connection =
+                    DriverManager.getConnection(
+                            futureMigrationPostgres.getJdbcUrl(),
+                            futureMigrationPostgres.getUsername(),
+                            futureMigrationPostgres.getPassword())) {
+                assertThat(
+                                queryForInt(
+                                        connection,
+                                        "SELECT MAX(version::integer) FROM flyway_schema_history"
+                                                + " WHERE success AND version ~ '^[0-9]+$'"))
+                        .isEqualTo(2);
+                assertThat(
+                                queryForInt(
+                                        connection,
+                                        "SELECT COUNT(*) FROM flyway_schema_history"
+                                                + " WHERE version IS NULL"
+                                                + " AND description = 'synthetic identity fixtures'"
+                                                + " AND success"))
+                        .isEqualTo(1);
+            }
+
+            Files.writeString(
+                    futureMigrationLocation.resolve("V3__future_migration_probe.sql"),
+                    "CREATE TABLE future_migration_probe (id INTEGER PRIMARY KEY);\n",
+                    StandardCharsets.UTF_8);
+
+            Flyway.configure()
+                    .dataSource(
+                            futureMigrationPostgres.getJdbcUrl(),
+                            futureMigrationPostgres.getUsername(),
+                            futureMigrationPostgres.getPassword())
+                    .locations(
+                            "classpath:db/migration",
+                            "classpath:db/devdata",
+                            "filesystem:" + futureMigrationLocation.toAbsolutePath())
+                    .load()
+                    .migrate();
+
+            try (Connection connection =
+                    DriverManager.getConnection(
+                            futureMigrationPostgres.getJdbcUrl(),
+                            futureMigrationPostgres.getUsername(),
+                            futureMigrationPostgres.getPassword())) {
+                assertThat(
+                                queryForInt(
+                                        connection,
+                                        "SELECT COUNT(*) FROM flyway_schema_history"
+                                                + " WHERE version = '3' AND success"))
+                        .isEqualTo(1);
+                assertThat(
+                                queryForInt(
+                                        connection,
+                                        "SELECT COUNT(*) FROM information_schema.tables"
+                                                + " WHERE table_schema = 'public'"
+                                                + " AND table_name = 'future_migration_probe'"))
+                        .isEqualTo(1);
             }
         }
     }

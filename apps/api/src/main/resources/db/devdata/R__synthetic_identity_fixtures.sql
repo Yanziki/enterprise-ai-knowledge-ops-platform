@@ -1,7 +1,8 @@
 INSERT INTO organizations (id, slug, display_name)
 VALUES
     ('10000000-0000-0000-0000-000000000001', 'acme', 'Acme Corporation'),
-    ('10000000-0000-0000-0000-000000000002', 'globex', 'Globex Corporation');
+    ('10000000-0000-0000-0000-000000000002', 'globex', 'Globex Corporation')
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO workspaces (id, organization_id, slug, display_name)
 VALUES
@@ -16,7 +17,8 @@ VALUES
         '10000000-0000-0000-0000-000000000002',
         'research',
         'Globex Research'
-    );
+    )
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO user_profiles (id, identity_subject, email, display_name)
 VALUES
@@ -37,7 +39,8 @@ VALUES
         '00000000-0000-0000-0000-000000000003',
         'other@example.com',
         'Globex Member'
-    );
+    )
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO memberships (id, user_profile_id, organization_id, workspace_id, role)
 VALUES
@@ -61,4 +64,5 @@ VALUES
         '10000000-0000-0000-0000-000000000002',
         NULL,
         'MEMBER'
-    );
+    )
+ON CONFLICT (id) DO NOTHING;

@@ -64,10 +64,16 @@ Flyway locations are selected only through explicit Spring profiles:
 | `container` | `classpath:db/migration,classpath:db/devdata` | Acme/Globex fixtures |
 | `test` | `classpath:db/migration,classpath:db/devdata` | Same deterministic test fixtures |
 
-`V2__identity_and_tenant_foundation.sql` contains only durable schema.
-`db/devdata/V900__synthetic_identity_fixtures.sql` contains the application
-organizations, workspaces, profiles, and memberships. Synthetic Keycloak users
-remain in the separate local realm JSON. No hostname detection or startup seeder
+`V2__identity_and_tenant_foundation.sql` contains only durable schema. Versioned
+migrations are reserved for durable schema evolution, and V2 is the latest
+versioned migration after Day 2. The explicitly enabled
+`db/devdata/R__synthetic_identity_fixtures.sql` repeatable migration contains the
+application organizations, workspaces, profiles, and memberships without
+advancing the versioned schema number, so future V3 and later migrations can be
+added normally. Its deterministic inserts use `ON CONFLICT DO NOTHING`: changing
+the repeatable fixture causes Flyway to rerun it without destructive reset logic,
+overwriting records, or creating duplicates. Synthetic application data and
+Keycloak users remain local/test-only. No hostname detection or startup seeder
 selects these fixtures.
 
 The test suite also migrates a second clean PostgreSQL container with only
@@ -110,7 +116,8 @@ asserts:
 - a Globex member can read Globex but receives 403 for Acme;
 - a member receives 403 from the admin endpoint;
 - a platform admin can read the admin summary.
-- pgvector and the explicit V900 fixture migration exist;
+- pgvector and the explicit repeatable fixture migration exist;
+- Flyway records no version 900 and reports V2 as the latest versioned migration;
 - organization-level and valid same-organization workspace memberships succeed;
 - an Acme membership paired with Globex Research is rejected by
   `memberships_workspace_organization_fk`.
@@ -168,6 +175,10 @@ issuer present in each token.
   corrected V2 and moved its synthetic inserts. Reset the disposable project
   volume with `docker compose down --volumes --remove-orphans`; do not run
   `flyway repair`.
+- **Flyway version 900 exists locally:** an earlier development-fixture layout
+  recorded V900. Reset the disposable project volume with
+  `docker compose down --volumes --remove-orphans`; do not enable out-of-order
+  execution or use `flyway repair` to rewrite migration history.
 - **Keycloak unhealthy or realm absent:** inspect
   `docker compose logs keycloak`; confirm the realm JSON is valid, then force
   recreate Keycloak as described above.
