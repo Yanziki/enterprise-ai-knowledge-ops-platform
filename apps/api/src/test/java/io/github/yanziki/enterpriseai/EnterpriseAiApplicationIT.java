@@ -20,17 +20,24 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.ApplicationContext;
+import org.springframework.core.env.Environment;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -51,6 +58,15 @@ class EnterpriseAiApplicationIT {
     private static final String ADMIN_SUBJECT = "00000000-0000-0000-0000-000000000001";
     private static final String MEMBER_SUBJECT = "00000000-0000-0000-0000-000000000002";
     private static final String OTHER_SUBJECT = "00000000-0000-0000-0000-000000000003";
+    private static final UUID ACME_ORGANIZATION_ID =
+            UUID.fromString("10000000-0000-0000-0000-000000000001");
+    private static final UUID ACME_WORKSPACE_ID =
+            UUID.fromString("20000000-0000-0000-0000-000000000001");
+    private static final UUID GLOBEX_WORKSPACE_ID =
+            UUID.fromString("20000000-0000-0000-0000-000000000002");
+    private static final DockerImageName PGVECTOR_IMAGE =
+            DockerImageName.parse("pgvector/pgvector:0.8.1-pg17-bookworm")
+                    .asCompatibleSubstituteFor("postgres");
     private static final HttpClient HTTP_CLIENT =
             HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private static final RSAKey RSA_KEY = createRsaKey();
@@ -58,9 +74,7 @@ class EnterpriseAiApplicationIT {
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>(
-                            DockerImageName.parse("pgvector/pgvector:0.8.1-pg17-bookworm")
-                                    .asCompatibleSubstituteFor("postgres"))
+            new PostgreSQLContainer<>(PGVECTOR_IMAGE)
                     .withDatabaseName("enterprise_ai_test")
                     .withUsername("enterprise_ai_test")
                     .withPassword("synthetic_test_password");
@@ -83,6 +97,8 @@ class EnterpriseAiApplicationIT {
     @LocalServerPort private int port;
 
     @Autowired private ApplicationContext applicationContext;
+
+    @Autowired private Environment environment;
 
     @Autowired private JdbcTemplate jdbcTemplate;
 
@@ -223,7 +239,9 @@ class EnterpriseAiApplicationIT {
     }
 
     @Test
-    void flywayCreatesConstrainedTenantSchemaOnPostgres() {
+    void testProfileExplicitlyLoadsFixturesAndCreatesConstrainedTenantSchema() {
+        assertThat(environment.getProperty("spring.flyway.locations"))
+                .isEqualTo("classpath:db/migration,classpath:db/devdata");
         assertThat(
                         jdbcTemplate.queryForObject(
                                 "SELECT COUNT(*) FROM pg_extension WHERE extname = 'vector'",
@@ -240,6 +258,100 @@ class EnterpriseAiApplicationIT {
                                                 + " (id, slug, display_name) VALUES (?, 'acme', 'Duplicate')",
                                         UUID.randomUUID()))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void productionMigrationLocationCreatesSchemaWithoutSyntheticData() throws Exception {
+        try (PostgreSQLContainer<?> schemaOnlyPostgres =
+                new PostgreSQLContainer<>(PGVECTOR_IMAGE)
+                        .withDatabaseName("enterprise_ai_schema_only")
+                        .withUsername("enterprise_ai_schema_only")
+                        .withPassword("synthetic_schema_only_password")) {
+            schemaOnlyPostgres.start();
+
+            Flyway.configure()
+                    .dataSource(
+                            schemaOnlyPostgres.getJdbcUrl(),
+                            schemaOnlyPostgres.getUsername(),
+                            schemaOnlyPostgres.getPassword())
+                    .locations("classpath:db/migration")
+                    .load()
+                    .migrate();
+
+            try (Connection connection =
+                    DriverManager.getConnection(
+                            schemaOnlyPostgres.getJdbcUrl(),
+                            schemaOnlyPostgres.getUsername(),
+                            schemaOnlyPostgres.getPassword())) {
+                assertThat(
+                                queryForInt(
+                                        connection,
+                                        "SELECT COUNT(*) FROM pg_extension WHERE extname = 'vector'"))
+                        .isEqualTo(1);
+                assertThat(queryForInt(connection, "SELECT COUNT(*) FROM organizations")).isZero();
+                assertThat(queryForInt(connection, "SELECT COUNT(*) FROM workspaces")).isZero();
+                assertThat(queryForInt(connection, "SELECT COUNT(*) FROM user_profiles")).isZero();
+                assertThat(queryForInt(connection, "SELECT COUNT(*) FROM memberships")).isZero();
+            }
+        }
+    }
+
+    @Test
+    void workspaceMembershipAcceptsWorkspaceFromSameOrganization() {
+        UUID profileId = insertTemporaryProfile("valid-workspace");
+        try {
+            assertThat(
+                            jdbcTemplate.update(
+                                    "INSERT INTO memberships"
+                                            + " (id, user_profile_id, organization_id, workspace_id, role)"
+                                            + " VALUES (?, ?, ?, ?, 'MEMBER')",
+                                    UUID.randomUUID(),
+                                    profileId,
+                                    ACME_ORGANIZATION_ID,
+                                    ACME_WORKSPACE_ID))
+                    .isEqualTo(1);
+        } finally {
+            deleteTemporaryProfile(profileId);
+        }
+    }
+
+    @Test
+    void organizationMembershipStillAcceptsNullWorkspace() {
+        UUID profileId = insertTemporaryProfile("organization-level");
+        try {
+            assertThat(
+                            jdbcTemplate.update(
+                                    "INSERT INTO memberships"
+                                            + " (id, user_profile_id, organization_id, workspace_id, role)"
+                                            + " VALUES (?, ?, ?, NULL, 'MEMBER')",
+                                    UUID.randomUUID(),
+                                    profileId,
+                                    ACME_ORGANIZATION_ID))
+                    .isEqualTo(1);
+        } finally {
+            deleteTemporaryProfile(profileId);
+        }
+    }
+
+    @Test
+    void workspaceMembershipRejectsWorkspaceFromDifferentOrganization() {
+        UUID profileId = insertTemporaryProfile("invalid-workspace");
+        try {
+            assertThatThrownBy(
+                            () ->
+                                    jdbcTemplate.update(
+                                            "INSERT INTO memberships"
+                                                    + " (id, user_profile_id, organization_id, workspace_id, role)"
+                                                    + " VALUES (?, ?, ?, ?, 'MEMBER')",
+                                            UUID.randomUUID(),
+                                            profileId,
+                                            ACME_ORGANIZATION_ID,
+                                            GLOBEX_WORKSPACE_ID))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("memberships_workspace_organization_fk");
+        } finally {
+            deleteTemporaryProfile(profileId);
+        }
     }
 
     private HttpResponse<String> get(String path, String accessToken)
@@ -282,6 +394,30 @@ class EnterpriseAiApplicationIT {
 
     private static Instant futureExpiry() {
         return Instant.now().plus(Duration.ofMinutes(5));
+    }
+
+    private UUID insertTemporaryProfile(String label) {
+        UUID profileId = UUID.randomUUID();
+        jdbcTemplate.update(
+                "INSERT INTO user_profiles"
+                        + " (id, identity_subject, email, display_name) VALUES (?, ?, ?, ?)",
+                profileId,
+                "integration-" + label + "-" + profileId,
+                label + "-" + profileId + "@example.test",
+                "Integration Test Profile");
+        return profileId;
+    }
+
+    private void deleteTemporaryProfile(UUID profileId) {
+        jdbcTemplate.update("DELETE FROM user_profiles WHERE id = ?", profileId);
+    }
+
+    private static int queryForInt(Connection connection, String sql) throws SQLException {
+        try (Statement statement = connection.createStatement();
+                ResultSet resultSet = statement.executeQuery(sql)) {
+            resultSet.next();
+            return resultSet.getInt(1);
+        }
     }
 
     private static RSAKey createRsaKey() {

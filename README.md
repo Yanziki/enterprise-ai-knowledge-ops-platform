@@ -27,7 +27,9 @@ before those capabilities are introduced.
   storage and are sent through one typed bearer-token API client.
 - `postgres`: PostgreSQL 17 with pgvector, Flyway-managed organizations,
   workspaces, user profiles, and memberships, plus database constraints and
-  indexes supporting tenant checks.
+  indexes supporting tenant checks. A composite foreign key prevents a
+  membership from pairing an organization with another organization's
+  workspace.
 - `keycloak`: pinned Keycloak 26.7.0 development container with a deterministic
   imported realm, public web client, API audience, and synthetic users.
 - `infra/nginx`: same-origin frontend and API reverse proxy.
@@ -48,6 +50,8 @@ See the [system context](docs/architecture/context.md),
 ```text
 apps/api/                 Spring Boot API and integration tests
 apps/web/                 React application and frontend tests
+apps/api/src/main/resources/db/devdata/
+                          Explicit local/test synthetic application fixtures
 infra/keycloak/           Development realm import
 infra/nginx/              Production-style Nginx configuration
 docs/product/             Product direction and policies
@@ -75,8 +79,13 @@ Start the complete identity-enabled stack:
 
 ```bash
 cp .env.example .env
+docker compose down --volumes --remove-orphans
 docker compose up --build --detach --wait
 ```
+
+The volume reset is required once after this unmerged V2 correction because its
+checksum and fixture layout changed. The removed data is synthetic local data;
+do not use `flyway repair` to conceal the mismatch.
 
 Open <http://localhost:8080>, select **Log in with Keycloak**, and use one of
 these development-only accounts:
@@ -89,6 +98,18 @@ these development-only accounts:
 
 These credentials and the direct-grant smoke client are synthetic local/CI
 fixtures. Never reuse them or this Keycloak configuration in production.
+
+## Migration and fixture boundary
+
+The production migration location, `classpath:db/migration`, contains durable
+schema only and never creates Acme, Globex, synthetic profiles, or memberships.
+The explicit `local`, `container`, and `test` profiles additionally load
+`classpath:db/devdata`, which contains the deterministic application fixtures.
+Synthetic Keycloak users remain isolated in the local realm import.
+
+V2 can be corrected in this pull request because it has not been merged. After
+a Flyway migration is merged or applied outside disposable development data,
+never edit or repair it in place; make corrections with a new forward migration.
 
 The member dashboard exposes only its authorized organization:
 
@@ -138,6 +159,9 @@ docker compose config --quiet
 Run the real composed identity stack:
 
 ```bash
+cp .env.example .env
+docker compose down --volumes --remove-orphans
+docker compose config --quiet
 docker compose up --build --detach --wait
 docker compose ps
 make identity-verify
@@ -146,7 +170,10 @@ make identity-verify
 Backend integration tests require a working Docker daemon because they use a
 real pgvector-enabled PostgreSQL container, never H2. CI repeats both suites,
 builds the Compose stack, checks pgvector, and runs the identity/isolation
-verifier.
+verifier. That verifier also proves the local fixtures were explicitly applied,
+accepts same-organization and nullable-workspace memberships in rollback-only
+transactions, and confirms the database rejects Acme membership paired with the
+Globex Research workspace.
 
 For host-based development, realm reset behavior, issuer checks, and 401/403
 troubleshooting, follow the

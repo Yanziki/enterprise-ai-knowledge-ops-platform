@@ -1,8 +1,8 @@
 # Local Development Runbook
 
 This runbook operates the development-only identity stack. The imported realm,
-users, passwords, and direct-grant smoke client are deterministic test fixtures,
-not a production identity-provider deployment.
+users, passwords, direct-grant smoke client, and application fixture data are
+deterministic test fixtures, not a production identity-provider deployment.
 
 ## Prerequisites
 
@@ -16,6 +16,7 @@ image builds.
 git clone https://github.com/Yanziki/enterprise-ai-knowledge-ops-platform.git
 cd enterprise-ai-knowledge-ops-platform
 cp .env.example .env
+docker compose down --volumes --remove-orphans
 docker compose config --quiet
 docker compose up --build --detach --wait
 docker compose ps
@@ -23,6 +24,12 @@ curl --fail http://localhost:8080/api/v1/system/status
 curl --fail http://localhost:8080/actuator/health/readiness
 open http://localhost:8080
 ```
+
+The volume reset is required when moving to the pre-merge V2 hardening change:
+V2's checksum changed and its former seed statements moved to an explicit
+fixture location. This is acceptable only because the affected local data is
+synthetic and the migration has not been merged. Do not use `flyway repair` to
+hide the checksum mismatch.
 
 The service URLs are:
 
@@ -45,6 +52,28 @@ docker compose down --remove-orphans
 
 Keycloak currently uses its container-local development database, so deleting
 its container also deletes local identity state.
+
+## Migration and fixture profiles
+
+Flyway locations are selected only through explicit Spring profiles:
+
+| Configuration | Flyway locations | Demonstration data |
+| --- | --- | --- |
+| Base/default production style | `classpath:db/migration` | None |
+| `local` | `classpath:db/migration,classpath:db/devdata` | Acme/Globex fixtures |
+| `container` | `classpath:db/migration,classpath:db/devdata` | Acme/Globex fixtures |
+| `test` | `classpath:db/migration,classpath:db/devdata` | Same deterministic test fixtures |
+
+`V2__identity_and_tenant_foundation.sql` contains only durable schema.
+`db/devdata/V900__synthetic_identity_fixtures.sql` contains the application
+organizations, workspaces, profiles, and memberships. Synthetic Keycloak users
+remain in the separate local realm JSON. No hostname detection or startup seeder
+selects these fixtures.
+
+The test suite also migrates a second clean PostgreSQL container with only
+`classpath:db/migration` and asserts that every tenant table is empty. Once any
+migration is merged or applied to non-disposable data, correct it only with a
+new forward migration—never by editing the applied file.
 
 ## Realm import behavior
 
@@ -81,6 +110,14 @@ asserts:
 - a Globex member can read Globex but receives 403 for Acme;
 - a member receives 403 from the admin endpoint;
 - a platform admin can read the admin summary.
+- pgvector and the explicit V900 fixture migration exist;
+- organization-level and valid same-organization workspace memberships succeed;
+- an Acme membership paired with Globex Research is rejected by
+  `memberships_workspace_organization_fk`.
+
+The valid membership checks run inside a transaction that is rolled back. The
+invalid check is also rolled back when PostgreSQL rejects it, so verification
+does not add fixture rows.
 
 ## Host development
 
@@ -127,6 +164,10 @@ issuer present in each token.
   `docker info`. Backend integration tests require Docker.
 - **Database unhealthy:** inspect `docker compose logs postgres`; verify the
   credentials in `.env` match the API variables.
+- **Flyway checksum mismatch for V2:** this unmerged hardening deliberately
+  corrected V2 and moved its synthetic inserts. Reset the disposable project
+  volume with `docker compose down --volumes --remove-orphans`; do not run
+  `flyway repair`.
 - **Keycloak unhealthy or realm absent:** inspect
   `docker compose logs keycloak`; confirm the realm JSON is valid, then force
   recreate Keycloak as described above.
@@ -140,7 +181,7 @@ issuer present in each token.
   reveal failed signature, issuer, audience, or expiry validation.
 - **403 Forbidden:** authentication succeeded but the allowlisted realm role,
   local profile, or application membership does not authorize the operation.
-  Confirm the token `sub` matches a seeded `user_profiles.external_subject` and
+  Confirm the token `sub` matches a seeded `user_profiles.identity_subject` and
   that the requested organization has an organization-level membership.
 - **Frontend reports unavailable:** call the status URL directly and inspect
   web and API logs. The production-style browser path should use the Nginx
@@ -156,7 +197,12 @@ issuer present in each token.
 docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
   -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';"
+docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  -c "SELECT version, description, success FROM flyway_schema_history ORDER BY installed_rank;"
 ```
+
+Run `make identity-verify` for the non-mutating valid and negative composite
+membership checks instead of manually inserting inconsistent data.
 
 ## Complete reset
 

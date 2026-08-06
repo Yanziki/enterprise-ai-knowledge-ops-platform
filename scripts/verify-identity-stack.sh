@@ -15,6 +15,11 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! docker compose version >/dev/null 2>&1; then
+  echo "Docker Compose v2 is required to verify the local database." >&2
+  exit 1
+fi
+
 set -a
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
@@ -24,6 +29,95 @@ WEB_BASE_URL="http://localhost:${WEB_PORT:-8080}"
 TOKEN_ENDPOINT="${OIDC_ISSUER_URI}/protocol/openid-connect/token"
 TEMP_DIRECTORY="$(mktemp -d)"
 trap 'rm -rf "${TEMP_DIRECTORY}"' EXIT
+
+database_sql() {
+  local sql="$1"
+  docker compose \
+    --project-directory "${REPOSITORY_ROOT}" \
+    --env-file "${ENV_FILE}" \
+    exec -T postgres \
+    psql -X --quiet --tuples-only --no-align --set=ON_ERROR_STOP=1 \
+    --username "${POSTGRES_USER}" \
+    --dbname "${POSTGRES_DB}" \
+    --command "${sql}"
+}
+
+assert_database_scalar() {
+  local expected="$1"
+  local label="$2"
+  local sql="$3"
+  local actual
+  actual="$(database_sql "${sql}")"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "FAIL ${label}: expected ${expected}, received ${actual}" >&2
+    exit 1
+  fi
+  echo "PASS ${label}: ${actual}"
+}
+
+verify_workspace_ownership_invariant() {
+  if ! database_sql "
+    BEGIN;
+    INSERT INTO user_profiles (id, identity_subject, email, display_name)
+    VALUES (
+      '39999999-0000-0000-0000-000000000001',
+      'local-invariant-valid',
+      'local-invariant-valid@example.test',
+      'Local Invariant Verification'
+    );
+    INSERT INTO memberships (id, user_profile_id, organization_id, workspace_id, role)
+    VALUES
+      (
+        '49999999-0000-0000-0000-000000000001',
+        '39999999-0000-0000-0000-000000000001',
+        '10000000-0000-0000-0000-000000000001',
+        NULL,
+        'MEMBER'
+      ),
+      (
+        '49999999-0000-0000-0000-000000000002',
+        '39999999-0000-0000-0000-000000000001',
+        '10000000-0000-0000-0000-000000000001',
+        '20000000-0000-0000-0000-000000000001',
+        'MEMBER'
+      );
+    ROLLBACK;
+  " >/dev/null; then
+    echo "FAIL valid organization and workspace memberships were rejected" >&2
+    exit 1
+  fi
+  echo "PASS organization-level membership permits a NULL workspace"
+  echo "PASS same-organization workspace membership is accepted"
+
+  if database_sql "
+    BEGIN;
+    INSERT INTO user_profiles (id, identity_subject, email, display_name)
+    VALUES (
+      '39999999-0000-0000-0000-000000000002',
+      'local-invariant-invalid',
+      'local-invariant-invalid@example.test',
+      'Local Invariant Verification'
+    );
+    INSERT INTO memberships (id, user_profile_id, organization_id, workspace_id, role)
+    VALUES (
+      '49999999-0000-0000-0000-000000000003',
+      '39999999-0000-0000-0000-000000000002',
+      '10000000-0000-0000-0000-000000000001',
+      '20000000-0000-0000-0000-000000000002',
+      'MEMBER'
+    );
+    ROLLBACK;
+  " >"${TEMP_DIRECTORY}/invalid-membership.log" 2>&1; then
+    echo "FAIL cross-organization workspace membership was accepted" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'memberships_workspace_organization_fk' \
+    "${TEMP_DIRECTORY}/invalid-membership.log"; then
+    echo "FAIL cross-organization membership failed for an unexpected reason" >&2
+    exit 1
+  fi
+  echo "PASS cross-organization workspace membership is rejected by the composite foreign key"
+}
 
 token_for() {
   local username="$1"
@@ -93,6 +187,20 @@ assert_body_contains() {
 MEMBER_TOKEN="$(token_for 'member@example.com' "${MEMBER_DEV_PASSWORD}")"
 OTHER_TOKEN="$(token_for 'other@example.com' "${OTHER_DEV_PASSWORD}")"
 ADMIN_TOKEN="$(token_for 'admin@example.com' "${ADMIN_DEV_PASSWORD}")"
+
+assert_database_scalar 1 'pgvector extension is installed' \
+  "SELECT COUNT(*) FROM pg_extension WHERE extname = 'vector';"
+assert_database_scalar 1 'development fixture migration is explicit and applied' \
+  "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '900' AND success;"
+assert_database_scalar 2 'development organizations are loaded' \
+  'SELECT COUNT(*) FROM organizations;'
+assert_database_scalar 2 'development workspaces are loaded' \
+  'SELECT COUNT(*) FROM workspaces;'
+assert_database_scalar 3 'development profiles are loaded' \
+  'SELECT COUNT(*) FROM user_profiles;'
+assert_database_scalar 3 'development memberships are loaded' \
+  'SELECT COUNT(*) FROM memberships;'
+verify_workspace_ownership_invariant
 
 assert_status 401 'unauthenticated /me is rejected' "${WEB_BASE_URL}/api/v1/me"
 
