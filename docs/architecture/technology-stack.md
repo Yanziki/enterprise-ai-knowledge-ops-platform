@@ -22,6 +22,9 @@ this document and the corresponding lockfiles together.
 | Lint / format | ESLint / Prettier | 10.8.0 / 3.9.6 |
 | Database | PostgreSQL / pgvector | 17 / 0.8.1 |
 | Reverse proxy | Nginx | 1.29.0 |
+| Local identity provider | Keycloak | 26.7.0 |
+| Browser OIDC integration | react-oidc-context / oidc-client-ts | 3.3.1 / 3.5.0 |
+| API authentication | Spring Security OAuth2 Resource Server | Spring Boot 4.1.0 BOM |
 
 ## Why these technologies
 
@@ -38,6 +41,10 @@ this document and the corresponding lockfiles together.
   real database family instead of an incompatible in-memory substitute.
 - **Docker Compose and Nginx:** reproducible local integration and same-origin
   routing that resembles a production container boundary.
+- **OIDC, Keycloak, and Spring Security:** delegate password authentication to a
+  standards-based provider while preserving signed-token validation at the API.
+- **react-oidc-context:** maintained React bindings over `oidc-client-ts` with
+  Authorization Code + PKCE and explicit session-storage configuration.
 
 Spring AI 2.0.0 is planned for a later milestone and is intentionally absent.
 Spring Modulith is also absent; module boundaries are expressed as Java packages
@@ -55,6 +62,10 @@ until compatibility and value are evaluated separately.
   exercise a same-origin browser model.
 - **Large UI framework:** deferred until repeatable interaction patterns justify
   its accessibility, bundle, and maintenance costs.
+- **Custom username/password authentication:** rejected because credential
+  storage, recovery, MFA, and session security belong to an identity provider.
+- **Tokens in localStorage:** rejected because persistence expands the exposure
+  window; Day 2 uses per-tab `sessionStorage` and records the remaining XSS risk.
 
 ## Version-upgrade policy
 

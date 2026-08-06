@@ -3,7 +3,7 @@
 PNPM ?= pnpm
 COMPOSE ?= docker compose
 
-.PHONY: help dev up down logs test verify clean
+.PHONY: help dev up down logs test verify identity-verify clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "Available commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -31,6 +31,9 @@ verify: ## Run backend, frontend, and Compose validation
 	cd apps/web && $(PNPM) test --run
 	cd apps/web && $(PNPM) build
 	$(COMPOSE) config --quiet
+
+identity-verify: ## Verify the running local OIDC and tenant-isolation stack
+	./scripts/verify-identity-stack.sh
 
 clean: ## Remove generated build output and stop containers
 	cd apps/api && ./mvnw clean

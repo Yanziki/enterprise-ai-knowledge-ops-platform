@@ -1,0 +1,159 @@
+{
+  "realm": "enterprise-ai",
+  "enabled": true,
+  "displayName": "Enterprise AI Local Development",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+  "roles": {
+    "realm": [
+      { "name": "PLATFORM_ADMIN", "description": "Synthetic local platform administrator" },
+      { "name": "TENANT_ADMIN", "description": "Synthetic local tenant administrator" },
+      { "name": "MEMBER", "description": "Synthetic local tenant member" },
+      { "name": "AUDITOR", "description": "Synthetic local read-only auditor" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "enterprise-ai-api",
+      "name": "Enterprise AI API",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "clientId": "enterprise-ai-web",
+      "name": "Enterprise AI Web",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": true,
+      "redirectUris": [
+        "http://localhost:8080",
+        "http://localhost:8080/",
+        "http://localhost:5173",
+        "http://localhost:5173/"
+      ],
+      "webOrigins": [
+        "http://localhost:8080",
+        "http://localhost:5173"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8080##http://localhost:8080/##http://localhost:5173##http://localhost:5173/"
+      },
+      "protocolMappers": [
+        {
+          "name": "enterprise-ai-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "enterprise-ai-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "synthetic tenant",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "tenant",
+            "claim.name": "tenant",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "multivalued": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "enterprise-ai-smoke",
+      "name": "Development-only API smoke tests",
+      "description": "Local and CI synthetic token acquisition only; never deploy to production",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "enterprise-ai-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "enterprise-ai-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "username": "admin@example.com",
+      "email": "admin@example.com",
+      "firstName": "Platform",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "attributes": { "tenant": ["acme"] },
+      "credentials": [
+        { "type": "password", "value": "AdminDevOnly123!", "temporary": false }
+      ],
+      "realmRoles": ["PLATFORM_ADMIN"]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "username": "member@example.com",
+      "email": "member@example.com",
+      "firstName": "Acme",
+      "lastName": "Member",
+      "enabled": true,
+      "emailVerified": true,
+      "attributes": { "tenant": ["acme"] },
+      "credentials": [
+        { "type": "password", "value": "MemberDevOnly123!", "temporary": false }
+      ],
+      "realmRoles": ["MEMBER"]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "username": "other@example.com",
+      "email": "other@example.com",
+      "firstName": "Globex",
+      "lastName": "Member",
+      "enabled": true,
+      "emailVerified": true,
+      "attributes": { "tenant": ["globex"] },
+      "credentials": [
+        { "type": "password", "value": "OtherDevOnly123!", "temporary": false }
+      ],
+      "realmRoles": ["MEMBER"]
+    }
+  ]
+}
