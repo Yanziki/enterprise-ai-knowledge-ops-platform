@@ -1,4 +1,4 @@
-FROM node:24.14.0-alpine3.23 AS build
+FROM node:24.18.1-alpine3.23 AS build
 RUN npm install --global pnpm@11.9.0
 WORKDIR /workspace
 
