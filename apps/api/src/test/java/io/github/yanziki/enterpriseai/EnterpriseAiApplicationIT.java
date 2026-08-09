@@ -12,9 +12,16 @@ import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import com.sun.net.httpserver.HttpServer;
+import io.github.yanziki.enterpriseai.knowledge.storage.BoundedUploadStager;
+import io.github.yanziki.enterpriseai.knowledge.storage.DocumentObjectKeyFactory;
+import io.github.yanziki.enterpriseai.knowledge.storage.ObjectStorage;
+import io.github.yanziki.enterpriseai.knowledge.storage.ObjectStorageException;
+import io.github.yanziki.enterpriseai.knowledge.storage.StagedUpload;
+import io.github.yanziki.enterpriseai.knowledge.storage.StorageProperties;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceAccessRole;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceAuthorizationService;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceOperation;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -53,10 +60,13 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+import software.amazon.awssdk.services.s3.S3Client;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
@@ -79,6 +89,11 @@ class EnterpriseAiApplicationIT {
     private static final DockerImageName PGVECTOR_IMAGE =
             DockerImageName.parse("pgvector/pgvector:0.8.1-pg17-bookworm")
                     .asCompatibleSubstituteFor("postgres");
+    private static final DockerImageName MINIO_IMAGE =
+            DockerImageName.parse("minio/minio:RELEASE.2025-09-07T16-13-09Z");
+    private static final String MINIO_ACCESS_KEY = "enterprise_ai_test";
+    private static final String MINIO_SECRET_KEY = "enterprise_ai_test_secret";
+    private static final String DOCUMENT_BUCKET = "enterprise-ai-documents-test";
     private static final HttpClient HTTP_CLIENT =
             HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private static final RSAKey RSA_KEY = createRsaKey();
@@ -90,6 +105,19 @@ class EnterpriseAiApplicationIT {
                     .withDatabaseName("enterprise_ai_test")
                     .withUsername("enterprise_ai_test")
                     .withPassword("synthetic_test_password");
+
+    @Container
+    static final GenericContainer<?> MINIO =
+            new GenericContainer<>(MINIO_IMAGE)
+                    .withEnv("MINIO_ROOT_USER", MINIO_ACCESS_KEY)
+                    .withEnv("MINIO_ROOT_PASSWORD", MINIO_SECRET_KEY)
+                    .withCommand("server", "/data")
+                    .withExposedPorts(9000)
+                    .waitingFor(
+                            Wait.forHttp("/minio/health/ready")
+                                    .forPort(9000)
+                                    .forStatusCode(200)
+                                    .withStartupTimeout(Duration.ofSeconds(60)));
 
     @DynamicPropertySource
     static void dynamicProperties(DynamicPropertyRegistry registry) {
@@ -104,6 +132,14 @@ class EnterpriseAiApplicationIT {
                 "app.identity.jwk-set-uri",
                 () -> "http://127.0.0.1:" + JWK_SERVER.getAddress().getPort() + "/jwks");
         registry.add("app.identity.audience", () -> AUDIENCE);
+        registry.add(
+                "app.storage.endpoint",
+                () -> "http://" + MINIO.getHost() + ":" + MINIO.getMappedPort(9000));
+        registry.add("app.storage.region", () -> "us-east-1");
+        registry.add("app.storage.bucket", () -> DOCUMENT_BUCKET);
+        registry.add("app.storage.access-key", () -> MINIO_ACCESS_KEY);
+        registry.add("app.storage.secret-key", () -> MINIO_SECRET_KEY);
+        registry.add("app.storage.path-style-access", () -> true);
     }
 
     @LocalServerPort private int port;
@@ -118,9 +154,52 @@ class EnterpriseAiApplicationIT {
 
     @Autowired private WorkspaceAuthorizationService workspaceAuthorizationService;
 
+    @Autowired private S3Client s3Client;
+
+    @Autowired private ObjectStorage objectStorage;
+
+    @Autowired private StorageProperties storageProperties;
+
+    @Autowired private DocumentObjectKeyFactory documentObjectKeyFactory;
+
+    @Autowired private BoundedUploadStager boundedUploadStager;
+
     @Test
     void applicationContextLoads() {
         assertThat(applicationContext).isNotNull();
+    }
+
+    @Test
+    void objectStorageUsesOpaqueKeysAndRoundTripsBytesThroughMinio() throws Exception {
+        s3Client.createBucket(builder -> builder.bucket(storageProperties.bucket()));
+        byte[] source = "storage-boundary".getBytes(StandardCharsets.UTF_8);
+        String objectKey =
+                documentObjectKeyFactory.create(
+                        UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+
+        assertThat(objectKey)
+                .startsWith("organizations/")
+                .endsWith("/original")
+                .doesNotContain("..", "customer-file.txt");
+
+        try (StagedUpload staged =
+                boundedUploadStager.stage(new ByteArrayInputStream(source), source.length)) {
+            assertThat(staged.byteSize()).isEqualTo(source.length);
+            assertThat(staged.sha256Hex())
+                    .isEqualTo("cb32b6f09ba925b838563672dc76f90f0d293d2e2eee9fc69363f20ed936d3c0");
+            objectStorage.put(
+                    objectKey, staged.path(), staged.byteSize(), "text/plain; charset=utf-8");
+        }
+
+        try (var stored = objectStorage.get(objectKey)) {
+            assertThat(stored.contentLength()).isEqualTo(source.length);
+            assertThat(stored.content().readAllBytes()).isEqualTo(source);
+        }
+
+        objectStorage.delete(objectKey);
+        assertThatThrownBy(() -> objectStorage.get(objectKey))
+                .isInstanceOf(ObjectStorageException.class)
+                .hasMessage("Could not read document bytes");
     }
 
     @Test

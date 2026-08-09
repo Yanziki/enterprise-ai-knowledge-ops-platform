@@ -7,6 +7,13 @@ app:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/enterprise_ai}
     username: ${DB_USERNAME:enterprise_ai}
     password: ${DB_PASSWORD:enterprise_ai_dev_only}
+  storage:
+    endpoint: ${OBJECT_STORAGE_ENDPOINT:http://localhost:9000}
+    region: ${OBJECT_STORAGE_REGION:us-east-1}
+    bucket: ${OBJECT_STORAGE_BUCKET:enterprise-ai-documents}
+    access-key: ${OBJECT_STORAGE_ACCESS_KEY:enterprise_ai_minio}
+    secret-key: ${OBJECT_STORAGE_SECRET_KEY:enterprise_ai_minio_dev_only}
+    path-style-access: ${OBJECT_STORAGE_PATH_STYLE_ACCESS:true}
 
 logging:
   level:

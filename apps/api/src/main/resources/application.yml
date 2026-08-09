@@ -26,6 +26,13 @@ app:
     issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8082/realms/enterprise-ai}
     jwk-set-uri: ${OIDC_JWK_SET_URI:http://localhost:8082/realms/enterprise-ai/protocol/openid-connect/certs}
     audience: ${OIDC_AUDIENCE:enterprise-ai-api}
+  storage:
+    endpoint: ${OBJECT_STORAGE_ENDPOINT:}
+    region: ${OBJECT_STORAGE_REGION:}
+    bucket: ${OBJECT_STORAGE_BUCKET:}
+    access-key: ${OBJECT_STORAGE_ACCESS_KEY:}
+    secret-key: ${OBJECT_STORAGE_SECRET_KEY:}
+    path-style-access: ${OBJECT_STORAGE_PATH_STYLE_ACCESS:true}
 
 application:
   version: "@project.version@"
