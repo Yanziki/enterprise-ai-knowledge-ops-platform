@@ -25,6 +25,11 @@ this document and the corresponding lockfiles together.
 | Local identity provider | Keycloak | 26.7.0 |
 | Browser OIDC integration | react-oidc-context / oidc-client-ts | 3.3.1 / 3.5.0 |
 | API authentication | Spring Security OAuth2 Resource Server | Spring Boot 4.1.0 BOM |
+| Object-storage client | AWS SDK for Java S3 | 2.46.8 |
+| MIME detection | Apache Tika Core | 3.3.2 |
+| PDF extraction | Apache PDFBox | 3.0.7 |
+| Local object storage | MinIO server | RELEASE.2025-09-07T16-13-09Z |
+| Local storage bootstrap | MinIO Client (`mc`) | RELEASE.2025-08-13T08-35-41Z |
 
 ## Why these technologies
 
@@ -45,6 +50,11 @@ this document and the corresponding lockfiles together.
   standards-based provider while preserving signed-token validation at the API.
 - **react-oidc-context:** maintained React bindings over `oidc-client-ts` with
   Authorization Code + PKCE and explicit session-storage configuration.
+- **S3-compatible object storage and AWS SDK:** originals stay outside the
+  relational database behind a small application-owned interface, while local
+  MinIO exercises the same private-bucket boundary used by the API and tests.
+- **Tika Core and PDFBox:** Tika detects supported media types without enabling
+  a broad parser surface; PDFBox performs explicitly bounded page extraction.
 
 Spring AI 2.0.0 is planned for a later milestone and is intentionally absent.
 Spring Modulith is also absent; module boundaries are expressed as Java packages

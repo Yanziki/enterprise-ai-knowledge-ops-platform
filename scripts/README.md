@@ -15,3 +15,10 @@ Run it only after copying `.env.example` to `.env` and starting the Compose stac
 The database membership checks use transactions that are rolled back or rejected,
 so they do not add fixture data. The script never prints access tokens and
 deletes its temporary response files on exit.
+
+- `verify-document-ingestion.sh` uploads the repository-owned TXT fixture as an
+  authorized tenant administrator, polls the durable job to `READY`, verifies
+  provenance and download hashes, proves MEMBER upload and cross-tenant access
+  are denied, checks anonymous object-store access receives `403`, and archives
+  the document. It obtains short-lived tokens without printing them and deletes
+  every temporary response and download on exit.

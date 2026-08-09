@@ -69,6 +69,27 @@ and fixed local passwords. Redirect URIs are restricted to localhost. These
 credentials must never be reused, exposed to a shared environment, or described as
 production-safe. Realm reset is destructive only to local synthetic data.
 
+## Document-ingestion boundary
+
+- Original documents live in a private S3-compatible bucket. Browser clients
+  cannot address that bucket directly; every metadata or download operation is
+  authorized again by the API. Object keys are backend-generated UUID paths and
+  are not exposed in API responses.
+- The server computes byte size and SHA-256 while staging a bounded stream; it
+  does not trust the filename, browser media type, hash, tenant IDs, lifecycle,
+  parser provenance, or object key supplied by a client.
+- The parser surface is intentionally limited to PDF, strict UTF-8 plain text,
+  and Markdown. Originals are capped at 20 MiB, PDF processing at 200 pages, and
+  normalized output at 2,000,000 characters. Text is never rendered as raw HTML.
+- Durable jobs carry tenant IDs and use database constraints, bounded claims,
+  stale-work recovery, and a maximum of three attempts. User-facing failures
+  contain stable safe codes rather than parser exceptions or stack traces.
+- Extraction is not malware scanning. Day 3 has no antivirus or content
+  disarm/reconstruction service and makes no claim that an accepted original is
+  safe to open. Production rollout requires quarantining/scanning policy,
+  separate least-privilege storage identities, encryption/retention decisions,
+  and immutable image digests.
+
 ## Future LLM-specific risks—not implemented
 
 Prompt injection, indirect injection, data exfiltration, insecure tool use,

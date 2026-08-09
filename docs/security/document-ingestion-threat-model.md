@@ -43,7 +43,7 @@ authorization oracle.
 | Malicious filename/path traversal | Multipart metadata to API | Strip path components/control characters; bound length; filename is metadata only | Unicode confusables may remain misleading to humans |
 | MIME spoofing | Declared MIME to detector | Extension is a hint; Tika/magic detection is authoritative; mismatch returns 415 | Polyglot or parser-ambiguous files may evade simple detection |
 | Oversized upload | Network/multipart boundary | Spring multipart and application streaming limits at 20 MiB; 413 response | Reverse proxy/body buffering needs production tuning |
-| Parser denial of service | Stored bytes to parser | 500 PDF pages, 5M extracted characters, bounded job attempts, one controlled worker pool | Crafted files may still consume significant CPU within bounds |
+| Parser denial of service | Stored bytes to parser | 200 PDF pages, 2M extracted characters, bounded job attempts, one controlled worker pool | Crafted files may still consume significant CPU within bounds |
 | Decompression/parser bomb | Parser boundary | No ZIP/Office/images; PDF page/text limits; dependency updates; timeouts planned | PDF internals may allocate before limits are observable |
 | Malicious PDF active content | Storage/parser boundary | Never execute/render PDF server-side; extract text only; download uses attachment headers | A downloaded malicious PDF may still target the user's local viewer |
 | XSS through extracted text/title/filename | API JSON to React | React escaped rendering; no raw HTML; safe content-disposition encoding | Future rich preview features must re-threat-model rendering |

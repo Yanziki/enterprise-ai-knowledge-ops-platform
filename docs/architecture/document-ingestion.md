@@ -128,8 +128,8 @@ tested `PLATFORM_ADMIN` bypass. UI role checks only hide unavailable actions.
 | Plain text | Tika detection; strict UTF-8 normalized as one unit | `DOCUMENT`, `body` |
 | Markdown | Extension plus text MIME verification; strict UTF-8 as one unit | `DOCUMENT`, `body` |
 
-Day 3 limits originals to 20 MiB, PDFs to 500 pages, and extracted normalized
-text to 5,000,000 characters. Empty documents, mismatched/unsupported types, and
+Day 3 limits originals to 20 MiB, PDFs to 200 pages, and extracted normalized
+text to 2,000,000 characters. Empty documents, mismatched/unsupported types, and
 limit violations use stable safe error codes. Extracted text is data and is never
 rendered as raw HTML or written to logs.
 

@@ -47,6 +47,50 @@ services:
       - platform
     restart: unless-stopped
 
+  object-storage:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${OBJECT_STORAGE_ACCESS_KEY:?OBJECT_STORAGE_ACCESS_KEY must be set}
+      MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_SECRET_KEY:?OBJECT_STORAGE_SECRET_KEY must be set}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl --fail --silent http://127.0.0.1:9000/minio/health/ready >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - object-storage-data:/data
+    ports:
+      - "${OBJECT_STORAGE_PORT:-9000}:9000"
+    networks:
+      - platform
+    restart: unless-stopped
+
+  object-storage-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      object-storage:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${OBJECT_STORAGE_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_SECRET_KEY}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - >-
+        mc alias set local http://object-storage:9000 "$${MINIO_ROOT_USER}"
+        "$${MINIO_ROOT_PASSWORD}" >/dev/null;
+        mc mb --ignore-existing "local/$${OBJECT_STORAGE_BUCKET}" >/dev/null;
+        mc anonymous set none "local/$${OBJECT_STORAGE_BUCKET}" >/dev/null;
+        mc anonymous get "local/$${OBJECT_STORAGE_BUCKET}"
+    networks:
+      - platform
+    restart: "no"
+
   api:
     build:
       context: ./apps/api
@@ -59,11 +103,19 @@ services:
       OIDC_ISSUER_URI: ${OIDC_ISSUER_URI:-http://localhost:8082/realms/enterprise-ai}
       OIDC_JWK_SET_URI: http://keycloak:8080/realms/enterprise-ai/protocol/openid-connect/certs
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-enterprise-ai-api}
+      OBJECT_STORAGE_ENDPOINT: http://object-storage:9000
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET}
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY}
+      OBJECT_STORAGE_PATH_STYLE_ACCESS: "true"
     depends_on:
       postgres:
         condition: service_healthy
       keycloak:
         condition: service_healthy
+      object-storage-init:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD-SHELL
@@ -112,6 +164,7 @@ services:
 
 volumes:
   postgres-data:
+  object-storage-data:
 
 networks:
   platform:
