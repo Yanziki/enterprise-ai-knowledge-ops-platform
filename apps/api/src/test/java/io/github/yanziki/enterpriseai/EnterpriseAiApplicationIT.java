@@ -12,6 +12,9 @@ import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import com.sun.net.httpserver.HttpServer;
+import io.github.yanziki.enterpriseai.tenant.WorkspaceAccessRole;
+import io.github.yanziki.enterpriseai.tenant.WorkspaceAuthorizationService;
+import io.github.yanziki.enterpriseai.tenant.WorkspaceOperation;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -43,6 +46,10 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.core.env.Environment;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -65,6 +72,8 @@ class EnterpriseAiApplicationIT {
             UUID.fromString("10000000-0000-0000-0000-000000000001");
     private static final UUID ACME_WORKSPACE_ID =
             UUID.fromString("20000000-0000-0000-0000-000000000001");
+    private static final UUID GLOBEX_ORGANIZATION_ID =
+            UUID.fromString("10000000-0000-0000-0000-000000000002");
     private static final UUID GLOBEX_WORKSPACE_ID =
             UUID.fromString("20000000-0000-0000-0000-000000000002");
     private static final DockerImageName PGVECTOR_IMAGE =
@@ -106,6 +115,8 @@ class EnterpriseAiApplicationIT {
     @Autowired private Flyway flyway;
 
     @Autowired private JdbcTemplate jdbcTemplate;
+
+    @Autowired private WorkspaceAuthorizationService workspaceAuthorizationService;
 
     @Test
     void applicationContextLoads() {
@@ -271,7 +282,7 @@ class EnterpriseAiApplicationIT {
                                 "SELECT MAX(version::integer) FROM flyway_schema_history"
                                         + " WHERE success AND version ~ '^[0-9]+$'",
                                 Integer.class))
-                .isEqualTo(2);
+                .isEqualTo(3);
         assertThat(
                         jdbcTemplate.queryForObject(
                                 "SELECT COUNT(*) FROM flyway_schema_history"
@@ -321,12 +332,19 @@ class EnterpriseAiApplicationIT {
                 assertThat(queryForInt(connection, "SELECT COUNT(*) FROM workspaces")).isZero();
                 assertThat(queryForInt(connection, "SELECT COUNT(*) FROM user_profiles")).isZero();
                 assertThat(queryForInt(connection, "SELECT COUNT(*) FROM memberships")).isZero();
+                assertThat(queryForInt(connection, "SELECT COUNT(*) FROM documents")).isZero();
+                assertThat(queryForInt(connection, "SELECT COUNT(*) FROM document_versions"))
+                        .isZero();
+                assertThat(queryForInt(connection, "SELECT COUNT(*) FROM document_ingestion_jobs"))
+                        .isZero();
+                assertThat(queryForInt(connection, "SELECT COUNT(*) FROM document_text_units"))
+                        .isZero();
                 assertThat(
                                 queryForInt(
                                         connection,
                                         "SELECT COUNT(*) FROM flyway_schema_history"
-                                                + " WHERE version IN ('1', '2') AND success"))
-                        .isEqualTo(2);
+                                                + " WHERE version IN ('1', '2', '3') AND success"))
+                        .isEqualTo(3);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -338,7 +356,7 @@ class EnterpriseAiApplicationIT {
                                         connection,
                                         "SELECT MAX(version::integer) FROM flyway_schema_history"
                                                 + " WHERE success AND version ~ '^[0-9]+$'"))
-                        .isEqualTo(2);
+                        .isEqualTo(3);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -391,7 +409,7 @@ class EnterpriseAiApplicationIT {
                                         connection,
                                         "SELECT MAX(version::integer) FROM flyway_schema_history"
                                                 + " WHERE success AND version ~ '^[0-9]+$'"))
-                        .isEqualTo(2);
+                        .isEqualTo(3);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -403,7 +421,7 @@ class EnterpriseAiApplicationIT {
             }
 
             Files.writeString(
-                    futureMigrationLocation.resolve("V3__future_migration_probe.sql"),
+                    futureMigrationLocation.resolve("V4__future_migration_probe.sql"),
                     "CREATE TABLE future_migration_probe (id INTEGER PRIMARY KEY);\n",
                     StandardCharsets.UTF_8);
 
@@ -428,7 +446,7 @@ class EnterpriseAiApplicationIT {
                                 queryForInt(
                                         connection,
                                         "SELECT COUNT(*) FROM flyway_schema_history"
-                                                + " WHERE version = '3' AND success"))
+                                                + " WHERE version = '4' AND success"))
                         .isEqualTo(1);
                 assertThat(
                                 queryForInt(
@@ -499,6 +517,132 @@ class EnterpriseAiApplicationIT {
         }
     }
 
+    @Test
+    void workspaceResolverPermitsReadButRejectsUploadForMember() {
+        JwtAuthenticationToken member = authentication(MEMBER_SUBJECT, "MEMBER");
+
+        assertThat(
+                        workspaceAuthorizationService
+                                .requireAccess(
+                                        member,
+                                        "acme",
+                                        "operations",
+                                        WorkspaceOperation.READ_METADATA)
+                                .accessRole())
+                .isEqualTo(WorkspaceAccessRole.MEMBER);
+        assertThatThrownBy(
+                        () ->
+                                workspaceAuthorizationService.requireAccess(
+                                        member,
+                                        "acme",
+                                        "operations",
+                                        WorkspaceOperation.UPLOAD_DOCUMENT))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void workspaceResolverPermitsTenantAdministratorUpload() {
+        assertThat(
+                        workspaceAuthorizationService
+                                .requireAccess(
+                                        authentication(ADMIN_SUBJECT, "TENANT_ADMIN"),
+                                        "acme",
+                                        "operations",
+                                        WorkspaceOperation.UPLOAD_DOCUMENT)
+                                .accessRole())
+                .isEqualTo(WorkspaceAccessRole.TENANT_ADMIN);
+    }
+
+    @Test
+    void workspaceResolverRejectsOrganizationWorkspaceConfusion() {
+        assertThatThrownBy(
+                        () ->
+                                workspaceAuthorizationService.requireAccess(
+                                        authentication(MEMBER_SUBJECT, "MEMBER"),
+                                        "acme",
+                                        "research",
+                                        WorkspaceOperation.READ_METADATA))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("404 NOT_FOUND");
+    }
+
+    @Test
+    void documentWorkspaceOrganizationMismatchIsRejected() {
+        assertThatThrownBy(
+                        () ->
+                                jdbcTemplate.update(
+                                        "INSERT INTO documents"
+                                                + " (id, organization_id, workspace_id, title, status,"
+                                                + " created_by_subject) VALUES (?, ?, ?, 'Invalid',"
+                                                + " 'ACTIVE', 'integration-test')",
+                                        UUID.randomUUID(),
+                                        ACME_ORGANIZATION_ID,
+                                        GLOBEX_WORKSPACE_ID))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .hasMessageContaining("documents_workspace_organization_fk");
+    }
+
+    @Test
+    void documentVersionNumberIsUniqueWithinDocument() {
+        UUID documentId = UUID.randomUUID();
+        UUID firstVersionId = UUID.randomUUID();
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(firstVersionId, documentId, 1, "a");
+
+            assertThatThrownBy(() -> insertTestVersion(UUID.randomUUID(), documentId, 1, "b"))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("document_versions_number_unique");
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void ingestionJobCannotReferenceVersionUnderDifferentTenant() {
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(versionId, documentId, 1, "c");
+
+            assertThatThrownBy(
+                            () ->
+                                    jdbcTemplate.update(
+                                            "INSERT INTO document_ingestion_jobs"
+                                                    + " (id, document_version_id, organization_id,"
+                                                    + " workspace_id, status) VALUES (?, ?, ?, ?, 'QUEUED')",
+                                            UUID.randomUUID(),
+                                            versionId,
+                                            GLOBEX_ORGANIZATION_ID,
+                                            GLOBEX_WORKSPACE_ID))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("document_ingestion_jobs_version_tenant_fk");
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void textUnitOrdinalIsUniqueWithinVersion() {
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(versionId, documentId, 1, "d");
+            insertTestTextUnit(UUID.randomUUID(), versionId, 1, "First unit");
+
+            assertThatThrownBy(
+                            () ->
+                                    insertTestTextUnit(
+                                            UUID.randomUUID(), versionId, 1, "Duplicate ordinal"))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("document_text_units_order_unique");
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
     private HttpResponse<String> get(String path, String accessToken)
             throws IOException, InterruptedException {
         HttpRequest.Builder request =
@@ -555,6 +699,76 @@ class EnterpriseAiApplicationIT {
 
     private void deleteTemporaryProfile(UUID profileId) {
         jdbcTemplate.update("DELETE FROM user_profiles WHERE id = ?", profileId);
+    }
+
+    private void insertTestDocument(UUID documentId) {
+        jdbcTemplate.update(
+                "INSERT INTO documents"
+                        + " (id, organization_id, workspace_id, title, status, created_by_subject)"
+                        + " VALUES (?, ?, ?, 'Integration document', 'ACTIVE', 'integration-test')",
+                documentId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID);
+    }
+
+    private void insertTestVersion(
+            UUID versionId, UUID documentId, int versionNumber, String keySuffix) {
+        jdbcTemplate.update(
+                "INSERT INTO document_versions"
+                        + " (id, document_id, organization_id, workspace_id, version_number,"
+                        + " original_filename, declared_content_type, detected_content_type,"
+                        + " byte_size, sha256_hex, object_key, ingestion_status, created_by_subject)"
+                        + " VALUES (?, ?, ?, ?, ?, 'fixture.txt', 'text/plain', 'text/plain',"
+                        + " 7, ?, ?, 'STORED', 'integration-test')",
+                versionId,
+                documentId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID,
+                versionNumber,
+                "a".repeat(64),
+                "integration/" + versionId + "/" + keySuffix);
+    }
+
+    private void insertTestTextUnit(UUID unitId, UUID versionId, int ordinal, String content) {
+        jdbcTemplate.update(
+                "INSERT INTO document_text_units"
+                        + " (id, document_version_id, organization_id, workspace_id, ordinal,"
+                        + " locator_type, locator_value, text_content, character_count)"
+                        + " VALUES (?, ?, ?, ?, ?, 'DOCUMENT', 'body', ?, ?)",
+                unitId,
+                versionId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID,
+                ordinal,
+                content,
+                content.length());
+    }
+
+    private void deleteTestDocument(UUID documentId) {
+        jdbcTemplate.update(
+                "DELETE FROM document_text_units WHERE document_version_id IN"
+                        + " (SELECT id FROM document_versions WHERE document_id = ?)",
+                documentId);
+        jdbcTemplate.update(
+                "DELETE FROM document_ingestion_jobs WHERE document_version_id IN"
+                        + " (SELECT id FROM document_versions WHERE document_id = ?)",
+                documentId);
+        jdbcTemplate.update("DELETE FROM document_versions WHERE document_id = ?", documentId);
+        jdbcTemplate.update("DELETE FROM documents WHERE id = ?", documentId);
+    }
+
+    private static JwtAuthenticationToken authentication(String subject, String role) {
+        Instant now = Instant.now();
+        Jwt jwt =
+                Jwt.withTokenValue("synthetic-integration-token")
+                        .header("alg", "RS256")
+                        .issuer(ISSUER)
+                        .subject(subject)
+                        .audience(List.of(AUDIENCE))
+                        .issuedAt(now.minusSeconds(1))
+                        .expiresAt(now.plusSeconds(300))
+                        .build();
+        return new JwtAuthenticationToken(jwt, List.of(new SimpleGrantedAuthority("ROLE_" + role)));
     }
 
     private static int queryForInt(Connection connection, String sql) throws SQLException {
