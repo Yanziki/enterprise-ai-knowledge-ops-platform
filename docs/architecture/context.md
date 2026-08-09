@@ -3,14 +3,15 @@
 ## System context
 
 The platform sits between enterprise users and approved enterprise knowledge or
-operations systems. Day 2 adds a local OIDC identity provider and an explicit
-authenticated-user and tenant-authorization boundary.
+operations systems. Day 3 adds private document storage and durable extraction
+behind the existing authenticated-user and tenant-authorization boundary.
 
 ```mermaid
 flowchart LR
   User["Enterprise user"] -->|"HTTPS"| Platform["Enterprise AI Knowledge & Operations Platform"]
   Admin["Platform administrator"] -->|"HTTPS"| Platform
-  Platform -. "planned: governed reads" .-> Sources["Enterprise knowledge sources"]
+  Platform -->|"authorized upload/download"| Storage["Private S3-compatible document storage"]
+  Platform -. "planned: source connectors" .-> Sources["Enterprise knowledge sources"]
   Platform -. "planned: approved writes" .-> Ops["Enterprise operations systems"]
   Platform -. "planned: model requests" .-> Models["Approved model provider"]
   Auditor["Security / auditor"] -. "planned: evidence access" .-> Platform
@@ -28,12 +29,14 @@ flowchart TB
   Web -->|"same-origin /api and /actuator"| API["Spring Boot API"]
   API -->|"issuer discovery and JWK validation"| IdP
   API -->|"JDBC/TLS in production"| DB[("PostgreSQL 17 + pgvector")]
+  API -->|"private S3 protocol"| Objects[("S3-compatible object storage")]
 
   subgraph Host["Docker Compose network"]
     Web
     API
     DB
     IdP
+    Objects
   end
 ```
 
@@ -56,12 +59,18 @@ published to browsers.
 5. **Tenant boundary:** the API derives tenant access from the validated subject
    and current database membership. Request-supplied slugs are selectors, not
    authorization context. Cross-tenant negative tests are mandatory.
-6. **Model/tool boundary (planned):** prompts, retrieved content, tool arguments,
+6. **Object-storage boundary:** the API generates keys from authorized UUID context,
+   keeps the bucket private, and streams authorized downloads. Bucket paths and
+   credentials never grant browser access or replace current membership checks.
+7. **Parser boundary:** filenames, MIME declarations, binaries, and extracted text
+   are untrusted. Detection, size/page/text limits, safe failures, and plain-text
+   rendering constrain processing; malware scanning remains a documented gap.
+8. **Model/tool boundary (planned):** prompts, retrieved content, tool arguments,
    and outputs are untrusted data subject to authorization and audit controls.
 
 ## Planned external dependencies
 
-- Approved object storage and enterprise document sources.
+- Enterprise source connectors beyond authenticated direct upload.
 - Approved embedding and language-model providers.
 - Observability backend for metrics, traces, logs, and alerts.
 - Enterprise operations systems exposed through human-approved tools.
