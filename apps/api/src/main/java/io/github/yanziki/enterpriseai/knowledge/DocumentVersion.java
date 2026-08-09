@@ -116,6 +116,11 @@ public class DocumentVersion {
         ingestionStatus = DocumentIngestionStatus.PROCESSING;
     }
 
+    public void reschedule() {
+        requireStatus(DocumentIngestionStatus.PROCESSING);
+        ingestionStatus = DocumentIngestionStatus.QUEUED;
+    }
+
     public void markReady(String parserName, String parserVersion, Instant readyAt) {
         requireStatus(DocumentIngestionStatus.PROCESSING);
         this.parserName = parserName;

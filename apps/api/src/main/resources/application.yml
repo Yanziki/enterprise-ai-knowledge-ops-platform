@@ -16,6 +16,10 @@ spring:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
 
 app:
   database:
@@ -33,6 +37,14 @@ app:
     access-key: ${OBJECT_STORAGE_ACCESS_KEY:}
     secret-key: ${OBJECT_STORAGE_SECRET_KEY:}
     path-style-access: ${OBJECT_STORAGE_PATH_STYLE_ACCESS:true}
+  ingestion:
+    max-original-bytes: ${INGESTION_MAX_ORIGINAL_BYTES:20971520}
+    max-extracted-characters: ${INGESTION_MAX_EXTRACTED_CHARACTERS:2000000}
+    max-pdf-pages: ${INGESTION_MAX_PDF_PAGES:200}
+    poll-interval-ms: ${INGESTION_POLL_INTERVAL_MS:500}
+    claim-batch-size: ${INGESTION_CLAIM_BATCH_SIZE:4}
+    retry-delay-seconds: ${INGESTION_RETRY_DELAY_SECONDS:2}
+    stale-claim-seconds: ${INGESTION_STALE_CLAIM_SECONDS:300}
 
 application:
   version: "@project.version@"

@@ -7,7 +7,11 @@ import java.nio.file.Path;
 public record StagedUpload(Path path, long byteSize, String sha256Hex) implements AutoCloseable {
 
     @Override
-    public void close() throws IOException {
-        Files.deleteIfExists(path);
+    public void close() {
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException exception) {
+            path.toFile().deleteOnExit();
+        }
     }
 }

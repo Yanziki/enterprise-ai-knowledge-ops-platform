@@ -23,6 +23,8 @@
         <spotless-maven-plugin.version>2.46.1</spotless-maven-plugin.version>
         <google-java-format.version>1.28.0</google-java-format.version>
         <aws-sdk.version>2.46.8</aws-sdk.version>
+        <tika.version>3.3.2</tika.version>
+        <pdfbox.version>3.0.7</pdfbox.version>
     </properties>
 
     <dependencies>
@@ -72,6 +74,16 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>url-connection-client</artifactId>
             <version>${aws-sdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-core</artifactId>
+            <version>${tika.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>${pdfbox.version}</version>
         </dependency>
 
         <dependency>

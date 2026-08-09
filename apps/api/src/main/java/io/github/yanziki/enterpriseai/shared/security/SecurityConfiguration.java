@@ -77,6 +77,10 @@ public class SecurityConfiguration {
                                         .requestMatchers(
                                                 HttpMethod.GET, "/api/v1/organizations/*/summary")
                                         .authenticated()
+                                        .requestMatchers(
+                                                "/api/v1/organizations/*/workspaces/*/documents",
+                                                "/api/v1/organizations/*/workspaces/*/documents/**")
+                                        .authenticated()
                                         .anyRequest()
                                         .denyAll())
                 .build();
