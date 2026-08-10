@@ -200,11 +200,19 @@ public class DocumentApplicationService {
                         organizationSlug,
                         workspaceSlug,
                         WorkspaceOperation.ARCHIVE_DOCUMENT);
-        KnowledgeDocument document =
-                documentRepository
-                        .findScopedForUpdate(
-                                documentId, context.organizationId(), context.workspaceId())
-                        .orElseThrow(DocumentApplicationService::notFound);
+        KnowledgeDocument document = findDocumentForUpdate(context, documentId);
+        if (document.getStatus() != DocumentStatus.ACTIVE) {
+            throw new KnowledgeApiException(
+                    HttpStatus.CONFLICT,
+                    "INVALID_LIFECYCLE_TRANSITION",
+                    "The document cannot be archived from its current state");
+        }
+        if (versionRepository.existsInFlightIngestionByDocumentId(documentId)) {
+            throw new KnowledgeApiException(
+                    HttpStatus.CONFLICT,
+                    "INGESTION_IN_PROGRESS",
+                    "The document cannot be archived while ingestion is still in progress");
+        }
         try {
             document.archive(Instant.now());
         } catch (IllegalStateException exception) {
@@ -232,7 +240,13 @@ public class DocumentApplicationService {
                         organizationSlug,
                         workspaceSlug,
                         WorkspaceOperation.RETRY_INGESTION);
-        findDocument(context, documentId);
+        KnowledgeDocument document = findDocumentForUpdate(context, documentId);
+        if (document.getStatus() != DocumentStatus.ACTIVE) {
+            throw new KnowledgeApiException(
+                    HttpStatus.CONFLICT,
+                    "DOCUMENT_ARCHIVED",
+                    "An archived document cannot retry ingestion");
+        }
         DocumentVersion version = findVersion(context, documentId, versionId);
         DocumentIngestionJob job =
                 jobRepository
@@ -270,6 +284,13 @@ public class DocumentApplicationService {
         return documentRepository
                 .findByIdAndOrganizationIdAndWorkspaceId(
                         documentId, context.organizationId(), context.workspaceId())
+                .orElseThrow(DocumentApplicationService::notFound);
+    }
+
+    private KnowledgeDocument findDocumentForUpdate(
+            WorkspaceAccessContext context, UUID documentId) {
+        return documentRepository
+                .findScopedForUpdate(documentId, context.organizationId(), context.workspaceId())
                 .orElseThrow(DocumentApplicationService::notFound);
     }
 

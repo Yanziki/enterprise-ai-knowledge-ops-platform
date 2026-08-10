@@ -54,7 +54,11 @@ sequenceDiagram
 The multipart request is bounded at 20 MiB. The key contains only UUIDs from the
 authorized context. If persistence fails after storage succeeds, the service makes
 a narrow compensating delete for that newly generated key; it never deletes an
-existing version or broad prefix.
+existing version or broad prefix. The S3 write and PostgreSQL transaction are not
+atomic: if the process or container terminates after the object is stored but
+before metadata commits or the compensating delete runs, an orphaned object can
+remain. A production-hardening milestone must add reconciliation and bounded
+orphan garbage collection against committed version metadata.
 
 ## Asynchronous processing sequence
 
@@ -152,6 +156,10 @@ Invalid transitions return conflict. Safe codes include
 `UNSUPPORTED_MEDIA_TYPE`, `FILE_TOO_LARGE`, `CONTENT_TYPE_MISMATCH`,
 `EMPTY_DOCUMENT`, `PARSER_FAILURE`, `TEXT_LIMIT_EXCEEDED`, `STORAGE_FAILURE`, and
 `INTERNAL_PROCESSING_ERROR`. Responses contain no raw exception or stack trace.
+Archival locks the logical document and succeeds only when every version is
+`READY` or `FAILED` and every job is `COMPLETED` or `FAILED`. Retry takes the same
+document lock and requires the logical document to remain `ACTIVE`, preventing an
+archive/retry race from producing `FAILED -> ARCHIVED -> QUEUED`.
 
 ## Relationship to future retrieval
 

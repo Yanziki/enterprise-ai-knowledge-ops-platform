@@ -319,6 +319,95 @@ class EnterpriseAiApplicationIT {
     }
 
     @Test
+    void archiveRejectsInFlightIngestionAndSucceedsAfterItBecomesReady() throws Exception {
+        String adminToken = token(ADMIN_SUBJECT, List.of("TENANT_ADMIN"), futureExpiry());
+        String base = "/api/v1/organizations/acme/workspaces/operations/documents";
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        String archivePath = base + "/" + documentId + "/archive";
+
+        insertTestDocument(documentId);
+        insertTestVersion(versionId, documentId, 1, "archive-lifecycle");
+        try {
+            HttpResponse<String> stored = post(archivePath, adminToken);
+            assertThat(stored.statusCode()).isEqualTo(409);
+            assertThat(stored.body()).contains("\"code\":\"INGESTION_IN_PROGRESS\"");
+            assertDocumentStatus(documentId, "ACTIVE");
+
+            jdbcTemplate.update(
+                    "UPDATE document_versions SET ingestion_status = 'QUEUED' WHERE id = ?",
+                    versionId);
+            insertQueuedTestJob(jobId, versionId);
+            HttpResponse<String> queued = post(archivePath, adminToken);
+            assertThat(queued.statusCode()).isEqualTo(409);
+            assertThat(queued.body()).contains("\"code\":\"INGESTION_IN_PROGRESS\"");
+            assertDocumentStatus(documentId, "ACTIVE");
+
+            jdbcTemplate.update(
+                    "UPDATE document_versions SET ingestion_status = 'PROCESSING' WHERE id = ?",
+                    versionId);
+            jdbcTemplate.update(
+                    "UPDATE document_ingestion_jobs"
+                            + " SET status = 'PROCESSING', attempt_count = 1,"
+                            + " claimed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP"
+                            + " WHERE id = ?",
+                    jobId);
+            HttpResponse<String> processing = post(archivePath, adminToken);
+            assertThat(processing.statusCode()).isEqualTo(409);
+            assertThat(processing.body()).contains("\"code\":\"INGESTION_IN_PROGRESS\"");
+            assertDocumentStatus(documentId, "ACTIVE");
+
+            jdbcTemplate.update(
+                    "UPDATE document_versions"
+                            + " SET ingestion_status = 'READY', ready_at = CURRENT_TIMESTAMP"
+                            + " WHERE id = ?",
+                    versionId);
+            jdbcTemplate.update(
+                    "UPDATE document_ingestion_jobs"
+                            + " SET status = 'COMPLETED', completed_at = CURRENT_TIMESTAMP,"
+                            + " updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    jobId);
+            HttpResponse<String> archived = post(archivePath, adminToken);
+            assertThat(archived.statusCode()).isEqualTo(200);
+            assertThat(archived.body()).contains("\"status\":\"ARCHIVED\"");
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void failedDocumentCanBeArchivedButCannotBeRetried() throws Exception {
+        String adminToken = token(ADMIN_SUBJECT, List.of("TENANT_ADMIN"), futureExpiry());
+        String globexToken = token(OTHER_SUBJECT, List.of("MEMBER"), futureExpiry());
+        String base = "/api/v1/organizations/acme/workspaces/operations/documents";
+        HttpResponse<String> accepted =
+                multipart(
+                        base,
+                        adminToken,
+                        "archived-failure.pdf",
+                        "application/pdf",
+                        "%PDF-1.4\ninvalid archived failure fixture"
+                                .getBytes(StandardCharsets.US_ASCII),
+                        null);
+        UUID documentId = UUID.fromString(jsonString(accepted.body(), "documentId"));
+        UUID versionId = UUID.fromString(jsonString(accepted.body(), "versionId"));
+        String detailPath = base + "/" + documentId;
+        String retryPath = detailPath + "/versions/" + versionId + "/retry";
+
+        awaitIngestion(detailPath, adminToken, "FAILED");
+        assertThat(post(retryPath, globexToken).statusCode()).isEqualTo(403);
+
+        HttpResponse<String> archived = post(detailPath + "/archive", adminToken);
+        assertThat(archived.statusCode()).isEqualTo(200);
+        assertThat(archived.body()).contains("\"status\":\"ARCHIVED\"");
+
+        HttpResponse<String> retry = post(retryPath, adminToken);
+        assertThat(retry.statusCode()).isEqualTo(409);
+        assertThat(retry.body()).contains("\"code\":\"DOCUMENT_ARCHIVED\"");
+    }
+
+    @Test
     void supportedFormatsExtractDeterministicallyAndUnsafeUploadsFailSafely() throws Exception {
         String adminToken = token(ADMIN_SUBJECT, List.of("TENANT_ADMIN"), futureExpiry());
         String base = "/api/v1/organizations/acme/workspaces/operations/documents";
@@ -482,6 +571,7 @@ class EnterpriseAiApplicationIT {
         String retryPath = detailPath + "/versions/" + versionId + "/retry";
 
         awaitIngestion(detailPath, adminToken, "FAILED");
+        assertDocumentStatus(documentId, "ACTIVE");
         for (int expectedAttempt = 2; expectedAttempt <= 3; expectedAttempt++) {
             assertThat(post(retryPath, adminToken).statusCode()).isEqualTo(200);
             awaitFailedAttempt(detailPath, adminToken, versionId, expectedAttempt);
@@ -1271,6 +1361,27 @@ class EnterpriseAiApplicationIT {
                 ordinal,
                 content,
                 content.length());
+    }
+
+    private void insertQueuedTestJob(UUID jobId, UUID versionId) {
+        jdbcTemplate.update(
+                "INSERT INTO document_ingestion_jobs"
+                        + " (id, document_version_id, organization_id, workspace_id, status,"
+                        + " attempt_count, next_attempt_at)"
+                        + " VALUES (?, ?, ?, ?, 'QUEUED', 0, CURRENT_TIMESTAMP + INTERVAL '1 day')",
+                jobId,
+                versionId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID);
+    }
+
+    private void assertDocumentStatus(UUID documentId, String expectedStatus) {
+        assertThat(
+                        jdbcTemplate.queryForObject(
+                                "SELECT status FROM documents WHERE id = ?",
+                                String.class,
+                                documentId))
+                .isEqualTo(expectedStatus);
     }
 
     private void deleteTestDocument(UUID documentId) {

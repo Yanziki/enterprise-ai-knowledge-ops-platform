@@ -243,6 +243,12 @@ calls, chat, MCP, audit business workflows, Redis, Kafka, Kubernetes, or cloud
 deployment. Extraction is bounded parsing, not a claim that uploaded content is
 safe. See the threat model before extending the supported format surface.
 
+Object storage and PostgreSQL are not written atomically. The API attempts a
+narrow compensating object delete when database persistence fails, but a process
+or container crash after the S3 write and before the metadata commit can leave an
+orphaned object. Production hardening must add reconciliation and bounded orphan
+garbage collection; Day 3 does not claim distributed transaction semantics.
+
 ## Contribution workflow
 
 Work is issue-first, uses Conventional Commits, and reaches `main` through pull
