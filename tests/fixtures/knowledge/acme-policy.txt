@@ -1,0 +1,1 @@
+Acme synthetic travel policy: employees must submit expense reports within 30 days. This document exists only for automated tests.

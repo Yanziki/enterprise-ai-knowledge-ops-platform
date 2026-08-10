@@ -7,6 +7,13 @@ app:
     url: ${DB_URL}
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
+  storage:
+    endpoint: ${OBJECT_STORAGE_ENDPOINT}
+    region: ${OBJECT_STORAGE_REGION}
+    bucket: ${OBJECT_STORAGE_BUCKET}
+    access-key: ${OBJECT_STORAGE_ACCESS_KEY}
+    secret-key: ${OBJECT_STORAGE_SECRET_KEY}
+    path-style-access: ${OBJECT_STORAGE_PATH_STYLE_ACCESS:true}
 
 server:
   port: 8080

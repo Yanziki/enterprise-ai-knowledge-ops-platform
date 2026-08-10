@@ -1,13 +1,19 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type {
+  CurrentUser,
+  DocumentDetail,
+  DocumentPage,
+  UploadAccepted,
+} from './api/client'
 import App from './App'
 
 const useAuthMock = vi.hoisted(() => vi.fn())
 
 vi.mock('react-oidc-context', () => ({ useAuth: useAuthMock }))
 
-const memberProfile = {
+const memberProfile: CurrentUser = {
   subject: '00000000-0000-0000-0000-000000000002',
   email: 'member@example.com',
   displayName: 'Acme Member',
@@ -27,7 +33,121 @@ const memberProfile = {
       ],
     },
   ],
-} as const
+}
+const memberOrganization = memberProfile.organizations[0]!
+const memberWorkspace = memberOrganization.workspaces[0]!
+
+const emptyDocumentPage = {
+  content: [],
+  page: 0,
+  size: 100,
+  totalElements: 0,
+  totalPages: 0,
+} satisfies DocumentPage
+
+const readyVersion = {
+  id: '50000000-0000-0000-0000-000000000001',
+  documentId: '60000000-0000-0000-0000-000000000001',
+  versionNumber: 1,
+  originalFilename: 'acme-policy.txt',
+  declaredContentType: 'text/plain',
+  detectedContentType: 'text/plain',
+  byteSize: 128,
+  sha256Hex: 'a'.repeat(64),
+  parserName: 'JDK UTF-8',
+  parserVersion: '21.0.8',
+  ingestionStatus: 'READY' as const,
+  failureCode: null,
+  failureMessage: null,
+  createdBySubject: memberProfile.subject,
+  createdAt: '2026-08-09T10:00:00Z',
+  readyAt: '2026-08-09T10:00:01Z',
+  textUnitCount: 1,
+}
+
+const readyDocumentPage: DocumentPage = {
+  content: [
+    {
+      id: readyVersion.documentId,
+      title: 'Acme synthetic policy',
+      status: 'ACTIVE',
+      createdBySubject: memberProfile.subject,
+      createdAt: readyVersion.createdAt,
+      archivedAt: null,
+      latestVersion: readyVersion,
+    },
+  ],
+  page: 0,
+  size: 100,
+  totalElements: 1,
+  totalPages: 1,
+}
+
+const readyDocumentDetail: DocumentDetail = {
+  id: readyVersion.documentId,
+  organizationId: memberOrganization.id,
+  workspaceId: memberWorkspace.id,
+  organizationSlug: 'acme',
+  workspaceSlug: 'operations',
+  title: 'Acme synthetic policy',
+  status: 'ACTIVE',
+  createdBySubject: memberProfile.subject,
+  createdAt: readyVersion.createdAt,
+  updatedAt: readyVersion.readyAt,
+  archivedAt: null,
+  versions: [readyVersion],
+}
+
+function authenticatedFetch(
+  profile: CurrentUser,
+  options: {
+    adminSummary?: Record<string, number>
+    organizationSummary?: Record<string, string | number>
+    documentPage?: DocumentPage
+    documentDetail?: DocumentDetail
+    uploadAccepted?: UploadAccepted
+  } = {},
+) {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = input.toString()
+    if (path === '/api/v1/me') return jsonResponse(profile)
+    if (path === '/api/v1/admin/system-summary') {
+      return jsonResponse(options.adminSummary ?? {}, 200)
+    }
+    if (path.endsWith('/summary')) {
+      return jsonResponse(options.organizationSummary ?? {}, 200)
+    }
+    if (path.includes('/documents?')) {
+      return jsonResponse(options.documentPage ?? emptyDocumentPage, 200)
+    }
+    if (path.endsWith('/documents') && init?.method === 'POST') {
+      return jsonResponse(options.uploadAccepted ?? {}, 202)
+    }
+    if (path.includes('/documents/')) {
+      return jsonResponse(options.documentDetail ?? {}, 200)
+    }
+    return Promise.resolve(new Response(null, { status: 404 }))
+  })
+}
+
+function jsonResponse(value: unknown, status = 200) {
+  return Promise.resolve(
+    new Response(JSON.stringify(value), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+}
+
+function expectBearerCall(path: string, accessToken: string) {
+  const call = vi
+    .mocked(fetch)
+    .mock.calls.find(([request]) => request.toString() === path)
+  expect(call).toBeDefined()
+  expect(new Headers(call?.[1]?.headers).get('Authorization')).toBe(
+    `Bearer ${accessToken}`,
+  )
+}
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -67,7 +187,7 @@ describe('App identity states', () => {
     )
 
     expect(
-      screen.getByText('Milestone · Identity & tenancy'),
+      screen.getByText('Milestone · Document ingestion & provenance'),
     ).toBeInTheDocument()
     expect(actions.signinRedirect).toHaveBeenCalledOnce()
     expect(
@@ -99,31 +219,16 @@ describe('App identity states', () => {
       isAuthenticated: true,
       user: { access_token: 'synthetic-member-token' },
     })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify(memberProfile), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      ),
-    )
+    vi.stubGlobal('fetch', authenticatedFetch(memberProfile))
 
     render(<App />)
 
     expect(await screen.findByText('Welcome, Acme Member')).toBeInTheDocument()
     expect(screen.getByText('member@example.com')).toBeInTheDocument()
-    expect(screen.getAllByText('Acme Corporation')).toHaveLength(2)
+    expect(screen.getAllByText('Acme Corporation')).toHaveLength(3)
     expect(screen.getByText(/MEMBER · Acme Operations/)).toBeInTheDocument()
     expect(screen.queryByText('System summary')).not.toBeInTheDocument()
-    expect(fetch).toHaveBeenCalledWith(
-      '/api/v1/me',
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: 'Bearer synthetic-member-token',
-        }),
-      }),
-    )
+    expectBearerCall('/api/v1/me', 'synthetic-member-token')
   })
 
   it('loads the admin-only card only for a platform admin', async () => {
@@ -139,39 +244,21 @@ describe('App identity states', () => {
     }
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce(
-          new Response(JSON.stringify(adminProfile), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          }),
-        )
-        .mockResolvedValueOnce(
-          new Response(
-            JSON.stringify({
-              organizationCount: 2,
-              workspaceCount: 2,
-              userProfileCount: 3,
-              membershipCount: 3,
-            }),
-            { status: 200, headers: { 'Content-Type': 'application/json' } },
-          ),
-        ),
+      authenticatedFetch(adminProfile, {
+        adminSummary: {
+          organizationCount: 2,
+          workspaceCount: 2,
+          userProfileCount: 3,
+          membershipCount: 3,
+        },
+      }),
     )
 
     render(<App />)
 
     expect(await screen.findByText('System summary')).toBeInTheDocument()
     expect(await screen.findByText('3 / 3')).toBeInTheDocument()
-    expect(fetch).toHaveBeenCalledWith(
-      '/api/v1/admin/system-summary',
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: 'Bearer synthetic-admin-token',
-        }),
-      }),
-    )
+    expectBearerCall('/api/v1/admin/system-summary', 'synthetic-admin-token')
   })
 
   it('builds the tenant selector from me and requests the selected summary', async () => {
@@ -181,31 +268,20 @@ describe('App identity states', () => {
     })
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce(
-          new Response(JSON.stringify(memberProfile), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          }),
-        )
-        .mockResolvedValueOnce(
-          new Response(
-            JSON.stringify({
-              id: memberProfile.organizations[0].id,
-              slug: 'acme',
-              displayName: 'Acme Corporation',
-              workspaceCount: 1,
-            }),
-            { status: 200, headers: { 'Content-Type': 'application/json' } },
-          ),
-        ),
+      authenticatedFetch(memberProfile, {
+        organizationSummary: {
+          id: memberOrganization.id,
+          slug: 'acme',
+          displayName: 'Acme Corporation',
+          workspaceCount: 1,
+        },
+      }),
     )
 
     render(<App />)
     expect(
-      await screen.findByRole('option', { name: 'Acme Corporation' }),
-    ).toBeInTheDocument()
+      await screen.findAllByRole('option', { name: 'Acme Corporation' }),
+    ).toHaveLength(2)
     expect(
       screen.queryByRole('option', { name: 'Globex Corporation' }),
     ).not.toBeInTheDocument()
@@ -221,6 +297,123 @@ describe('App identity states', () => {
       '/api/v1/organizations/acme/summary',
       expect.any(Object),
     )
+  })
+
+  it('gives a member document provenance and download controls without mutation controls', async () => {
+    configureAuth({
+      isAuthenticated: true,
+      user: { access_token: 'synthetic-member-token' },
+    })
+    vi.stubGlobal(
+      'fetch',
+      authenticatedFetch(memberProfile, {
+        documentPage: readyDocumentPage,
+        documentDetail: readyDocumentDetail,
+      }),
+    )
+
+    render(<App />)
+
+    expect(
+      await screen.findByRole('heading', { name: 'Knowledge workspace' }),
+    ).toBeInTheDocument()
+    expect(await screen.findByText('Acme synthetic policy')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Upload document' }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'View detail' }))
+    expect(await screen.findByText('a'.repeat(64))).toBeInTheDocument()
+    expect(screen.getByText('JDK UTF-8 · 21.0.8')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Archive document' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows tenant-admin upload validation and accepted processing state', async () => {
+    const adminProfile: CurrentUser = {
+      ...memberProfile,
+      displayName: 'Acme Tenant Admin',
+      email: 'admin@example.com',
+      platformRoles: ['TENANT_ADMIN'],
+      organizations: [{ ...memberOrganization, role: 'TENANT_ADMIN' }],
+    }
+    const accepted: UploadAccepted = {
+      documentId: readyVersion.documentId,
+      versionId: readyVersion.id,
+      versionNumber: 1,
+      ingestionStatus: 'QUEUED',
+      sha256Hex: readyVersion.sha256Hex,
+      byteSize: readyVersion.byteSize,
+    }
+    configureAuth({
+      isAuthenticated: true,
+      user: { access_token: 'synthetic-admin-token' },
+    })
+    vi.stubGlobal(
+      'fetch',
+      authenticatedFetch(adminProfile, {
+        documentDetail: readyDocumentDetail,
+        uploadAccepted: accepted,
+      }),
+    )
+    const user = userEvent.setup({ applyAccept: false })
+
+    render(<App />)
+    const input = await screen.findByLabelText('Original file')
+    await user.upload(
+      input,
+      new File(['not supported'], 'sample.html', { type: 'text/html' }),
+    )
+    expect(
+      screen.getByText('Choose a PDF, TXT, or Markdown file.'),
+    ).toBeInTheDocument()
+
+    await user.upload(
+      input,
+      new File(['synthetic policy'], 'policy.txt', { type: 'text/plain' }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Upload document' }))
+    expect(
+      await screen.findByText('Accepted · version 1 · QUEUED'),
+    ).toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: 'Archive document' }),
+    ).toBeInTheDocument()
+    const uploadCall = vi
+      .mocked(fetch)
+      .mock.calls.find(
+        ([path, init]) =>
+          path.toString().endsWith('/documents') && init?.method === 'POST',
+      )
+    expect(uploadCall?.[1]?.body).toBeInstanceOf(FormData)
+  })
+
+  it('keeps auditor access metadata-only in the Knowledge workspace', async () => {
+    const auditorProfile: CurrentUser = {
+      ...memberProfile,
+      displayName: 'Acme Auditor',
+      platformRoles: ['AUDITOR'],
+      organizations: [{ ...memberOrganization, role: 'AUDITOR' }],
+    }
+    configureAuth({
+      isAuthenticated: true,
+      user: { access_token: 'synthetic-auditor-token' },
+    })
+    vi.stubGlobal(
+      'fetch',
+      authenticatedFetch(auditorProfile, { documentPage: readyDocumentPage }),
+    )
+
+    render(<App />)
+    expect(await screen.findByText('Acme synthetic policy')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Download' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Upload document' }),
+    ).not.toBeInTheDocument()
   })
 
   it('handles API 401 and 403 without exposing token contents', async () => {
@@ -257,15 +450,7 @@ describe('App identity states', () => {
       isAuthenticated: true,
       user: { access_token: 'synthetic-member-token' },
     })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify(memberProfile), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      ),
-    )
+    vi.stubGlobal('fetch', authenticatedFetch(memberProfile))
     render(<App />)
 
     await userEvent.click(

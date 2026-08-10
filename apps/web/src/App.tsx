@@ -8,6 +8,7 @@ import {
   type OrganizationSummary,
 } from './api/client'
 import { getSystemStatus, type SystemStatus } from './api/system'
+import { KnowledgeWorkspace } from './knowledge/KnowledgeWorkspace'
 import './styles.css'
 
 type BackendState =
@@ -23,7 +24,6 @@ type IdentityState =
   | { phase: 'unavailable' }
 
 const futureModules = [
-  ['Knowledge', 'Governed sources and citation-ready content.'],
   ['Conversations', 'Grounded assistance with inspectable evidence.'],
   ['Workflows', 'Human-approved operational actions.'],
   ['Audit', 'Traceable access, approvals, and outcomes.'],
@@ -74,15 +74,15 @@ function App() {
 
 function PublicLanding({ onLogin }: { onLogin: () => void }) {
   return (
-    <PageShell milestone="Identity & tenancy">
+    <PageShell milestone="Document ingestion & provenance">
       <section className="hero" aria-labelledby="page-title">
-        <p className="eyebrow">Governed identity. Isolated tenants.</p>
+        <p className="eyebrow">Private sources. Verifiable provenance.</p>
         <h1 id="page-title">
           Enterprise AI Knowledge &amp; Operations Platform
         </h1>
         <p className="hero-copy">
-          Sign in through the local OIDC provider to inspect your authenticated
-          profile, platform roles, organization memberships, and workspaces.
+          Sign in through the local OIDC provider to access private,
+          tenant-scoped document ingestion and immutable source provenance.
         </p>
         <button className="primary-action" type="button" onClick={onLogin}>
           Log in with Keycloak
@@ -165,14 +165,14 @@ function ProtectedDashboard({
   }
 
   return (
-    <PageShell milestone="Authenticated" onLogout={onLogout}>
+    <PageShell milestone="Document ingestion & provenance" onLogout={onLogout}>
       <main className="dashboard" id="top">
         <section className="dashboard-intro" aria-labelledby="dashboard-title">
-          <p className="eyebrow">Protected tenant dashboard</p>
+          <p className="eyebrow">Protected knowledge operations</p>
           <h1 id="dashboard-title">Welcome, {identity.user.displayName}</h1>
           <p className="hero-copy">
-            This data comes from the protected API after signed-token validation
-            and membership lookup.
+            Identity, workspace access, document bytes, and provenance are all
+            enforced by the protected API.
           </p>
         </section>
 
@@ -200,6 +200,7 @@ function ProtectedDashboard({
         </section>
 
         <TenantSummaryCard user={identity.user} api={api} />
+        <KnowledgeWorkspace user={identity.user} api={api} />
         <PlannedModules />
       </main>
     </PageShell>
@@ -410,13 +411,19 @@ function PlannedModules() {
   return (
     <section className="modules" aria-labelledby="modules-title">
       <div className="section-heading">
-        <p className="eyebrow">Planned platform boundaries</p>
-        <h2 id="modules-title">Planned, not implemented.</h2>
+        <p className="eyebrow">Platform boundaries</p>
+        <h2 id="modules-title">Knowledge is active. AI remains planned.</h2>
       </div>
       <ul className="module-grid">
+        <li className="module-card module-card--active">
+          <span className="module-number">01</span>
+          <h3>Knowledge</h3>
+          <p>Governed originals and provenance-aware normalized content.</p>
+          <span className="planned">Active milestone</span>
+        </li>
         {futureModules.map(([name, description], index) => (
           <li className="module-card" key={name}>
-            <span className="module-number">0{index + 1}</span>
+            <span className="module-number">0{index + 2}</span>
             <h3>{name}</h3>
             <p>{description}</p>
             <span className="planned">Planned</span>
@@ -453,8 +460,8 @@ function PageShell({
       </header>
       {children}
       <footer>
-        <span>Production-oriented local identity foundation</span>
-        <span>No production AI functionality yet</span>
+        <span>Private ingestion and provenance foundation</span>
+        <span>No RAG or LLM functionality yet</span>
       </footer>
     </div>
   )
@@ -472,7 +479,7 @@ function MessageShell({
   onAction?: () => void
 }) {
   return (
-    <PageShell milestone="Identity & tenancy">
+    <PageShell milestone="Document ingestion & provenance">
       <main className="message-panel">
         <p className="eyebrow">Identity boundary</p>
         <h1>{title}</h1>

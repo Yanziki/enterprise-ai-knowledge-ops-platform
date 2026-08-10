@@ -5,10 +5,11 @@ traceable, human-supervised operations. The platform is being built as a secure
 modular monolith with a Spring Boot API, React web client, PostgreSQL with
 pgvector, and standards-based identity.
 
-> **Current milestone: Identity and tenant isolation.** Day 2 adds a
-> production-oriented local identity foundation, not production-ready identity.
-> There is still no production AI functionality, document ingestion, retrieval,
-> chat, MCP server, or business workflow implementation.
+> **Current milestone: Document ingestion and provenance.** Day 3 adds private
+> original storage, immutable provenance, durable asynchronous extraction, and
+> an access-controlled Knowledge workspace on top of the Day 2 identity and
+> tenant boundary. Retrieval, embeddings, RAG, LLM calls, chat, MCP, and business
+> workflows are still deliberately absent.
 
 ## Problem statement
 
@@ -26,12 +27,14 @@ before those capabilities are introduced.
   Authorization Code Flow with PKCE. Tokens remain in tab-scoped session
   storage and are sent through one typed bearer-token API client.
 - `postgres`: PostgreSQL 17 with pgvector, Flyway-managed organizations,
-  workspaces, user profiles, and memberships, plus database constraints and
-  indexes supporting tenant checks. A composite foreign key prevents a
-  membership from pairing an organization with another organization's
-  workspace.
+  workspaces, memberships, documents, immutable versions, ingestion jobs, and
+  ordered text units. Composite foreign keys enforce tenant ownership through
+  the complete document/provenance hierarchy.
 - `keycloak`: pinned Keycloak 26.7.0 development container with a deterministic
   imported realm, public web client, API audience, and synthetic users.
+- `object-storage`: pinned MinIO development service with a private bucket. The
+  API is the only browser-facing path for originals; object keys and storage
+  credentials never leave the backend.
 - `infra/nginx`: same-origin frontend and API reverse proxy.
 - `docs`: product, architecture, security, ADR, and operational documentation.
 
@@ -41,9 +44,9 @@ where they may do it. Server-side tenant authorization is applied even when the
 frontend offers only authorized organizations.
 
 See the [system context](docs/architecture/context.md),
-[technology stack](docs/architecture/technology-stack.md),
-[OIDC ADR](docs/adr/0003-use-oidc-identity-provider.md), and
-[identity threat model](docs/security/identity-threat-model.md).
+[document-ingestion architecture](docs/architecture/document-ingestion.md),
+[technology stack](docs/architecture/technology-stack.md), and
+[document-ingestion threat model](docs/security/document-ingestion-threat-model.md).
 
 ## Repository structure
 
@@ -75,18 +78,12 @@ with `apps/web/pnpm-lock.yaml`.
 
 ## Local login
 
-Start the complete identity-enabled stack:
+Start the complete identity and document-ingestion stack:
 
 ```bash
 cp .env.example .env
-docker compose down --volumes --remove-orphans
 docker compose up --build --detach --wait
 ```
-
-The volume reset is required once after this unmerged hardening because V2's
-checksum and the former V900 fixture layout changed. The removed data is
-synthetic local data; do not use `flyway repair` to conceal the mismatch or
-enable out-of-order execution.
 
 Open <http://localhost:8080>, select **Log in with Keycloak**, and use one of
 these development-only accounts:
@@ -108,15 +105,15 @@ The explicit `local`, `container`, and `test` profiles additionally load
 `classpath:db/devdata`, which contains the deterministic application fixtures as
 the idempotent repeatable migration `R__synthetic_identity_fixtures.sql`.
 Versioned migrations are reserved for durable schema evolution, so the fixture
-does not advance the schema version: Day 2 ends at V2 and future V3 and later
-migrations can be added normally. If the repeatable fixture checksum changes,
+does not advance the schema version. Day 3 adds forward-only V3 for the document,
+version, job, and text-unit schema without modifying V1 or V2. If the repeatable
+fixture checksum changes,
 Flyway reruns its `INSERT ... ON CONFLICT DO NOTHING` statements without deleting,
 overwriting, or duplicating existing fixture records. Synthetic application data
 and Keycloak users remain local/test-only.
 
-V2 can be corrected in this pull request because it has not been merged. After
-a Flyway migration is merged or applied outside disposable development data,
-never edit or repair it in place; make corrections with a new forward migration.
+After a Flyway migration is merged or applied, never edit or repair it in place;
+make corrections with a new forward migration.
 
 The member dashboard exposes only its authorized organization:
 
@@ -125,6 +122,42 @@ The member dashboard exposes only its authorized organization:
 The platform-admin role additionally unlocks a protected system summary:
 
 ![Authenticated platform-admin dashboard](docs/assets/day-2-admin-dashboard.jpg)
+
+## Knowledge workspace
+
+The Knowledge workspace accepts PDF, UTF-8 plain-text, and Markdown originals.
+Uploads are limited to 20 MiB, extracted normalized text to 2,000,000 characters,
+and PDFs to 200 pages. An accepted upload returns `202 Accepted`, is stored under
+a backend-generated opaque object key, and progresses asynchronously through
+`QUEUED` and `PROCESSING` to `READY` or a safe `FAILED` state. Jobs survive API
+restarts, use transactional claims, recover stale work, and stop after three
+attempts. Authorized tenant administrators may retry a failed version.
+
+Each immutable version records sanitized filename, declared and detected media
+type, byte count, server-computed SHA-256, uploader subject, timestamps, parser
+name/version, and ordered source locators. PDFs produce one text unit per page;
+text and Markdown produce one document-body unit. A logical document can receive
+new immutable versions or be archived; archive hides it from the default list but
+does not pretend that the original or provenance was physically erased.
+
+| Role | Metadata/provenance | Original download | Upload/new version | Archive/retry |
+| --- | --- | --- | --- | --- |
+| `PLATFORM_ADMIN` | Any tenant | Yes | Yes | Yes |
+| `TENANT_ADMIN` | Authorized scope | Yes | Yes | Yes |
+| `MEMBER` | Authorized scope | Yes | No | No |
+| `AUDITOR` | Authorized scope | No | No | No |
+
+Every operation re-resolves the authenticated subject, organization, workspace,
+membership, role, and resource ownership on the server. The UI is not an
+authorization boundary. Downloads are streamed through the API after that check;
+the private MinIO/S3-compatible bucket is never made anonymous and the browser
+receives no object key or storage credential.
+
+The completed Knowledge UI and document provenance views are captured here:
+
+![Tenant-admin Knowledge workspace](docs/assets/day-3-knowledge-workspace.jpg)
+
+![Immutable document version provenance](docs/assets/day-3-document-provenance.jpg)
 
 ## Authorization behavior
 
@@ -149,6 +182,18 @@ The verifier obtains short-lived synthetic tokens without printing them and
 proves unauthenticated `401`, role-based `403`, authorized Acme/Globex access,
 and denial in both cross-tenant directions.
 
+Run the composed document-ingestion boundary demonstration:
+
+```bash
+make knowledge-verify
+```
+
+It proves unauthenticated upload `401`, member upload `403`, tenant-admin upload
+`202`, asynchronous transition to `READY`, persisted provenance, byte-for-byte
+authorized download with matching SHA-256, cross-tenant denial, anonymous object
+storage denial, and archive behavior. It uses only synthetic fixtures and never
+prints access tokens or storage credentials.
+
 ## Verification
 
 Run the repository test suites and static checks:
@@ -160,25 +205,25 @@ pnpm lint
 pnpm test --run
 pnpm build
 cd ../..
-docker compose config --quiet
+docker compose --env-file .env.example config --quiet
 ```
 
 Run the real composed identity stack:
 
 ```bash
 cp .env.example .env
-docker compose down --volumes --remove-orphans
 docker compose config --quiet
 docker compose up --build --detach --wait
 docker compose ps
 make identity-verify
+make knowledge-verify
 ```
 
 Backend integration tests require a working Docker daemon because they use a
 real pgvector-enabled PostgreSQL container, never H2. CI repeats both suites,
-builds the Compose stack, checks pgvector, and runs the identity/isolation
-verifier. That verifier also proves the repeatable local fixture was explicitly
-applied without recording version 900, confirms V2 is the latest versioned
+builds the Compose stack, checks pgvector, and runs the identity/isolation and
+document-ingestion verifiers. The identity verifier also proves the repeatable
+local fixture was explicitly applied without recording version 900, confirms V3 is the latest versioned
 migration, accepts same-organization and nullable-workspace memberships in
 rollback-only transactions, and confirms the database rejects Acme membership
 paired with the Globex Research workspace.
@@ -189,10 +234,20 @@ troubleshooting, follow the
 
 ## Explicitly unfinished
 
-Day 2 does not implement public registration, password reset, social login,
-production identity-provider deployment, production secrets, billing, document
-upload, object storage, embeddings, vector search, RAG, chat, MCP, audit business
-workflows, Redis, Kafka, Kubernetes, or cloud deployment.
+Day 3 does not implement malware scanning, OCR, password-protected PDF support,
+Office/image/HTML/URL/ZIP ingestion, physical retention deletion, per-object
+encryption keys, separate production-grade object-storage identities, public
+registration, password reset, social login, production identity deployment,
+production secrets, billing, embeddings, vector search, retrieval, RAG, LLM
+calls, chat, MCP, audit business workflows, Redis, Kafka, Kubernetes, or cloud
+deployment. Extraction is bounded parsing, not a claim that uploaded content is
+safe. See the threat model before extending the supported format surface.
+
+Object storage and PostgreSQL are not written atomically. The API attempts a
+narrow compensating object delete when database persistence fails, but a process
+or container crash after the S3 write and before the metadata commit can leave an
+orphaned object. Production hardening must add reconciliation and bounded orphan
+garbage collection; Day 3 does not claim distributed transaction semantics.
 
 ## Contribution workflow
 

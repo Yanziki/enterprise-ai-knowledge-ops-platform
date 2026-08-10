@@ -81,6 +81,7 @@ jobs:
             -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
             -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';"
           ./scripts/verify-identity-stack.sh
+          ./scripts/verify-document-ingestion.sh
       - name: Capture service logs
         if: failure()
         run: docker compose logs --no-color
