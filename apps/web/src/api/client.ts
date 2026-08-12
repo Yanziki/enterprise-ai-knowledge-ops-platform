@@ -100,6 +100,47 @@ export interface UploadAccepted {
   byteSize: number
 }
 
+export type RetrievalMode = 'AUTO' | 'LEXICAL' | 'VECTOR' | 'HYBRID'
+
+export interface RetrievalCapabilities {
+  lexicalAvailable: boolean
+  vectorAvailable: boolean
+  availableModes: RetrievalMode[]
+  autoMode: 'LEXICAL' | 'HYBRID'
+  embeddingProvider: string | null
+  embeddingModel: string | null
+  embeddingDimension: number | null
+}
+
+export interface RetrievalCitation {
+  documentId: string
+  documentTitle: string
+  documentVersionId: string
+  versionNumber: number
+  locatorType: 'PAGE' | 'DOCUMENT'
+  locatorValue: string
+  startCharacter: number
+  endCharacter: number
+  snippet: string
+}
+
+export interface RetrievalSearchResult {
+  chunkId: string
+  rank: number
+  score: number
+  lexicalScore: number | null
+  vectorScore: number | null
+  citation: RetrievalCitation
+}
+
+export interface RetrievalSearchResponse {
+  query: string
+  requestedMode: RetrievalMode
+  effectiveMode: Exclude<RetrievalMode, 'AUTO'>
+  topK: number
+  results: RetrievalSearchResult[]
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -159,6 +200,18 @@ export interface AuthenticatedApiClient {
     documentId: string,
     versionId: string,
   ): Promise<Blob>
+  getRetrievalCapabilities(
+    organizationSlug: string,
+    workspaceSlug: string,
+    signal?: AbortSignal,
+  ): Promise<RetrievalCapabilities>
+  search(
+    organizationSlug: string,
+    workspaceSlug: string,
+    query: string,
+    mode: RetrievalMode,
+    topK: number,
+  ): Promise<RetrievalSearchResponse>
 }
 
 export function createAuthenticatedApiClient(
@@ -185,6 +238,8 @@ export function createAuthenticatedApiClient(
 
   const documentBase = (organizationSlug: string, workspaceSlug: string) =>
     `/api/v1/organizations/${encodeURIComponent(organizationSlug)}/workspaces/${encodeURIComponent(workspaceSlug)}/documents`
+  const retrievalBase = (organizationSlug: string, workspaceSlug: string) =>
+    `/api/v1/organizations/${encodeURIComponent(organizationSlug)}/workspaces/${encodeURIComponent(workspaceSlug)}/retrieval`
 
   return {
     getMe: (signal) => request<CurrentUser>('/api/v1/me', { signal }),
@@ -247,5 +302,19 @@ export function createAuthenticatedApiClient(
       if (!response.ok) throw new ApiError(response.status)
       return response.blob()
     },
+    getRetrievalCapabilities: (organizationSlug, workspaceSlug, signal) =>
+      request<RetrievalCapabilities>(
+        `${retrievalBase(organizationSlug, workspaceSlug)}/capabilities`,
+        { signal },
+      ),
+    search: (organizationSlug, workspaceSlug, query, mode, topK) =>
+      request<RetrievalSearchResponse>(
+        `${retrievalBase(organizationSlug, workspaceSlug)}/search`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, mode, topK }),
+        },
+      ),
   }
 }
