@@ -4,6 +4,11 @@ spring:
   main:
     banner-mode: "off"
 
+app:
+  retrieval:
+    embedding-mode: deterministic-smoke
+    worker-enabled: false
+
 logging:
   level:
     root: WARN

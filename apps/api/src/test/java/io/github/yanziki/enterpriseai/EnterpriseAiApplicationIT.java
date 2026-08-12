@@ -18,6 +18,16 @@ import io.github.yanziki.enterpriseai.knowledge.storage.ObjectStorage;
 import io.github.yanziki.enterpriseai.knowledge.storage.ObjectStorageException;
 import io.github.yanziki.enterpriseai.knowledge.storage.StagedUpload;
 import io.github.yanziki.enterpriseai.knowledge.storage.StorageProperties;
+import io.github.yanziki.enterpriseai.retrieval.RetrievalMode;
+import io.github.yanziki.enterpriseai.retrieval.chunking.RetrievalChunkDraft;
+import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexJobClaimer;
+import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexLifecycleService;
+import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexProcessor;
+import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexReconciler;
+import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexWorkContext;
+import io.github.yanziki.enterpriseai.retrieval.search.RetrievalSearchRequest;
+import io.github.yanziki.enterpriseai.retrieval.search.RetrievalSearchResponse;
+import io.github.yanziki.enterpriseai.retrieval.search.RetrievalSearchService;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceAccessRole;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceAuthorizationService;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceOperation;
@@ -42,11 +52,18 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -176,6 +193,18 @@ class EnterpriseAiApplicationIT {
     @Autowired private DocumentObjectKeyFactory documentObjectKeyFactory;
 
     @Autowired private BoundedUploadStager boundedUploadStager;
+
+    @Autowired private RetrievalIndexReconciler retrievalIndexReconciler;
+
+    @Autowired private RetrievalIndexJobClaimer retrievalIndexJobClaimer;
+
+    @Autowired private RetrievalIndexLifecycleService retrievalIndexLifecycleService;
+
+    @Autowired private RetrievalIndexProcessor retrievalIndexProcessor;
+
+    @Autowired private RetrievalSearchService retrievalSearchService;
+
+    @Autowired private tools.jackson.databind.ObjectMapper objectMapper;
 
     @BeforeEach
     void ensurePrivateDocumentBucket() {
@@ -634,8 +663,8 @@ class EnterpriseAiApplicationIT {
         assertThat(response.body())
                 .contains("\"organizationCount\":2")
                 .contains("\"workspaceCount\":2")
-                .contains("\"userProfileCount\":3")
-                .contains("\"membershipCount\":3");
+                .contains("\"userProfileCount\":4")
+                .contains("\"membershipCount\":4");
     }
 
     @Test
@@ -724,9 +753,9 @@ class EnterpriseAiApplicationIT {
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM workspaces", Integer.class))
                 .isEqualTo(2);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM user_profiles", Integer.class))
-                .isEqualTo(3);
+                .isEqualTo(4);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM memberships", Integer.class))
-                .isEqualTo(3);
+                .isEqualTo(4);
         assertThat(
                         jdbcTemplate.queryForObject(
                                 "SELECT COUNT(*) FROM flyway_schema_history"
@@ -738,7 +767,7 @@ class EnterpriseAiApplicationIT {
                                 "SELECT MAX(version::integer) FROM flyway_schema_history"
                                         + " WHERE success AND version ~ '^[0-9]+$'",
                                 Integer.class))
-                .isEqualTo(3);
+                .isEqualTo(4);
         assertThat(
                         jdbcTemplate.queryForObject(
                                 "SELECT COUNT(*) FROM flyway_schema_history"
@@ -799,8 +828,8 @@ class EnterpriseAiApplicationIT {
                                 queryForInt(
                                         connection,
                                         "SELECT COUNT(*) FROM flyway_schema_history"
-                                                + " WHERE version IN ('1', '2', '3') AND success"))
-                        .isEqualTo(3);
+                                                + " WHERE version IN ('1', '2', '3', '4') AND success"))
+                        .isEqualTo(4);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -812,7 +841,7 @@ class EnterpriseAiApplicationIT {
                                         connection,
                                         "SELECT MAX(version::integer) FROM flyway_schema_history"
                                                 + " WHERE success AND version ~ '^[0-9]+$'"))
-                        .isEqualTo(3);
+                        .isEqualTo(4);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -831,9 +860,9 @@ class EnterpriseAiApplicationIT {
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM workspaces", Integer.class))
                 .isEqualTo(2);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM user_profiles", Integer.class))
-                .isEqualTo(3);
+                .isEqualTo(4);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM memberships", Integer.class))
-                .isEqualTo(3);
+                .isEqualTo(4);
     }
 
     @Test
@@ -865,7 +894,7 @@ class EnterpriseAiApplicationIT {
                                         connection,
                                         "SELECT MAX(version::integer) FROM flyway_schema_history"
                                                 + " WHERE success AND version ~ '^[0-9]+$'"))
-                        .isEqualTo(3);
+                        .isEqualTo(4);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -877,7 +906,7 @@ class EnterpriseAiApplicationIT {
             }
 
             Files.writeString(
-                    futureMigrationLocation.resolve("V4__future_migration_probe.sql"),
+                    futureMigrationLocation.resolve("V5__future_migration_probe.sql"),
                     "CREATE TABLE future_migration_probe (id INTEGER PRIMARY KEY);\n",
                     StandardCharsets.UTF_8);
 
@@ -902,7 +931,7 @@ class EnterpriseAiApplicationIT {
                                 queryForInt(
                                         connection,
                                         "SELECT COUNT(*) FROM flyway_schema_history"
-                                                + " WHERE version = '4' AND success"))
+                                                + " WHERE version = '5' AND success"))
                         .isEqualTo(1);
                 assertThat(
                                 queryForInt(
@@ -1099,6 +1128,711 @@ class EnterpriseAiApplicationIT {
         }
     }
 
+    @Test
+    void retrievalIndexGenerationAndTenantScopeAreDatabaseEnforced() {
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(versionId, documentId, 1, "retrieval");
+
+            UUID indexId = UUID.randomUUID();
+            insertTestRetrievalIndex(indexId, documentId, versionId, 1);
+
+            assertThatThrownBy(
+                            () ->
+                                    insertTestRetrievalIndex(
+                                            UUID.randomUUID(), documentId, versionId, 1))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("retrieval_indexes_generation_unique");
+
+            assertThatThrownBy(
+                            () ->
+                                    jdbcTemplate.update(
+                                            "INSERT INTO retrieval_indexes"
+                                                    + " (id, document_id, document_version_id,"
+                                                    + " organization_id, workspace_id, generation, status,"
+                                                    + " chunker_name, chunker_version, chunk_size, chunk_overlap)"
+                                                    + " VALUES (?, ?, ?, ?, ?, 2, 'QUEUED',"
+                                                    + " 'paragraph-whitespace', '1', 1200, 150)",
+                                            UUID.randomUUID(),
+                                            documentId,
+                                            versionId,
+                                            GLOBEX_ORGANIZATION_ID,
+                                            GLOBEX_WORKSPACE_ID))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("retrieval_indexes_version_tenant_fk");
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void readyVersionIsAutomaticallyIndexedWithStableProvenanceAndEmbeddings()
+            throws InterruptedException {
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID textUnitId = UUID.randomUUID();
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(versionId, documentId, 1, "ready-reconciliation");
+            insertTestTextUnit(
+                    textUnitId,
+                    versionId,
+                    1,
+                    "Travel expenses require manager approval before reimbursement.");
+            markTestVersionReady(versionId);
+
+            for (int pass = 0; pass < 10; pass++) {
+                retrievalIndexReconciler.enqueueMissingReadyVersions();
+                List<UUID> claimed =
+                        retrievalIndexJobClaimer.claimNextBatch(4, Instant.now().plusSeconds(1));
+                claimed.forEach(retrievalIndexProcessor::process);
+                if (jdbcTemplate.queryForObject(
+                                "SELECT COUNT(*) FROM retrieval_indexes"
+                                        + " WHERE document_version_id = ? AND status = 'READY'",
+                                Integer.class,
+                                versionId)
+                        == 1) {
+                    break;
+                }
+            }
+            awaitRetrievalIndex(versionId, "READY");
+            retrievalIndexReconciler.enqueueMissingReadyVersions();
+
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT COUNT(*) FROM retrieval_indexes"
+                                            + " WHERE document_version_id = ?",
+                                    Integer.class,
+                                    versionId))
+                    .isEqualTo(1);
+            assertThat(
+                            jdbcTemplate.queryForMap(
+                                    "SELECT source_text_unit_id, locator_type, locator_value,"
+                                            + " start_character, end_character, character_count,"
+                                            + " embedding_provider, embedding_model,"
+                                            + " vector_dims(embedding) AS dimension"
+                                            + " FROM retrieval_chunks WHERE document_version_id = ?",
+                                    versionId))
+                    .containsEntry("source_text_unit_id", textUnitId)
+                    .containsEntry("locator_type", "DOCUMENT")
+                    .containsEntry("locator_value", "body")
+                    .containsEntry("start_character", 0)
+                    .containsEntry("end_character", 62)
+                    .containsEntry("character_count", 62)
+                    .containsEntry("embedding_provider", "deterministic-smoke")
+                    .containsEntry("embedding_model", "hashed-token-v1-test-only")
+                    .containsEntry("dimension", 64);
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void staleRetrievalClaimIsRequeuedThenFailsAtBoundedAttemptLimit() {
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID indexId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(versionId, documentId, 1, "stale-index");
+            markTestVersionReady(versionId);
+            insertTestRetrievalIndex(indexId, documentId, versionId, 1);
+            jdbcTemplate.update(
+                    "UPDATE retrieval_indexes SET status = 'PROCESSING' WHERE id = ?", indexId);
+            insertProcessingRetrievalJob(jobId, indexId, versionId, 1);
+
+            retrievalIndexJobClaimer.recoverStaleClaims(Instant.now(), Instant.now());
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT status FROM retrieval_index_jobs WHERE id = ?",
+                                    String.class,
+                                    jobId))
+                    .isEqualTo("QUEUED");
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT status FROM retrieval_indexes WHERE id = ?",
+                                    String.class,
+                                    indexId))
+                    .isEqualTo("QUEUED");
+
+            jdbcTemplate.update(
+                    "UPDATE retrieval_indexes SET status = 'PROCESSING' WHERE id = ?", indexId);
+            jdbcTemplate.update(
+                    "UPDATE retrieval_index_jobs SET status = 'PROCESSING', attempt_count = 3,"
+                            + " claimed_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    jobId);
+            retrievalIndexJobClaimer.recoverStaleClaims(
+                    Instant.now().plusSeconds(1), Instant.now());
+
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT status FROM retrieval_index_jobs WHERE id = ?",
+                                    String.class,
+                                    jobId))
+                    .isEqualTo("FAILED");
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT status FROM retrieval_indexes WHERE id = ?",
+                                    String.class,
+                                    indexId))
+                    .isEqualTo("FAILED");
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void olderIndexCompletingAfterNewerIndexCannotRegressCurrentVersion() throws Exception {
+        UUID documentId = UUID.randomUUID();
+        UUID firstVersionId = UUID.randomUUID();
+        UUID secondVersionId = UUID.randomUUID();
+        UUID firstUnitId = UUID.randomUUID();
+        UUID secondUnitId = UUID.randomUUID();
+        String marker = "monotonic-cutover";
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(firstVersionId, documentId, 1, "out-of-order-v1");
+            insertTestTextUnit(firstUnitId, firstVersionId, 1, marker + " obsolete version one");
+            markTestVersionReady(firstVersionId);
+            insertTestVersion(secondVersionId, documentId, 2, "out-of-order-v2");
+            insertTestTextUnit(secondUnitId, secondVersionId, 1, marker + " current version two");
+            markTestVersionReady(secondVersionId);
+
+            RetrievalIndexWorkContext first =
+                    insertProcessingRetrievalContext(documentId, firstVersionId);
+            RetrievalIndexWorkContext second =
+                    insertProcessingRetrievalContext(documentId, secondVersionId);
+
+            completeRetrievalIndex(
+                    second, secondUnitId, marker + " current version two", Instant.now());
+            assertRetrievalIndexStatus(second.retrievalIndexId(), "READY");
+            completeRetrievalIndex(
+                    first, firstUnitId, marker + " obsolete version one", Instant.now());
+
+            assertRetrievalIndexStatus(first.retrievalIndexId(), "SUPERSEDED");
+            assertRetrievalIndexStatus(second.retrievalIndexId(), "READY");
+            assertRetrievalJobStatus(first.jobId(), "COMPLETED");
+            assertRetrievalJobStatus(second.jobId(), "COMPLETED");
+            assertSearchUsesOnlyVersion(marker, secondVersionId, firstVersionId);
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void normalIndexCompletionOrderStillPromotesTheNewestVersion() throws Exception {
+        UUID documentId = UUID.randomUUID();
+        UUID firstVersionId = UUID.randomUUID();
+        UUID secondVersionId = UUID.randomUUID();
+        UUID firstUnitId = UUID.randomUUID();
+        UUID secondUnitId = UUID.randomUUID();
+        String marker = "normal-cutover";
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(firstVersionId, documentId, 1, "normal-v1");
+            insertTestTextUnit(firstUnitId, firstVersionId, 1, marker + " obsolete version one");
+            markTestVersionReady(firstVersionId);
+            insertTestVersion(secondVersionId, documentId, 2, "normal-v2");
+            insertTestTextUnit(secondUnitId, secondVersionId, 1, marker + " current version two");
+            markTestVersionReady(secondVersionId);
+
+            RetrievalIndexWorkContext first =
+                    insertProcessingRetrievalContext(documentId, firstVersionId);
+            RetrievalIndexWorkContext second =
+                    insertProcessingRetrievalContext(documentId, secondVersionId);
+
+            completeRetrievalIndex(
+                    first, firstUnitId, marker + " obsolete version one", Instant.now());
+            assertRetrievalIndexStatus(first.retrievalIndexId(), "READY");
+            completeRetrievalIndex(
+                    second, secondUnitId, marker + " current version two", Instant.now());
+
+            assertRetrievalIndexStatus(first.retrievalIndexId(), "SUPERSEDED");
+            assertRetrievalIndexStatus(second.retrievalIndexId(), "READY");
+            assertSearchUsesOnlyVersion(marker, secondVersionId, firstVersionId);
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void independentlyClaimedConcurrentCompletionsCannotRegressCurrentVersion() throws Exception {
+        UUID documentId = UUID.randomUUID();
+        UUID firstVersionId = UUID.randomUUID();
+        UUID secondVersionId = UUID.randomUUID();
+        UUID firstUnitId = UUID.randomUUID();
+        UUID secondUnitId = UUID.randomUUID();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(firstVersionId, documentId, 1, "concurrent-v1");
+            insertTestTextUnit(firstUnitId, firstVersionId, 1, "concurrent marker version one");
+            markTestVersionReady(firstVersionId);
+            insertTestVersion(secondVersionId, documentId, 2, "concurrent-v2");
+            insertTestTextUnit(secondUnitId, secondVersionId, 1, "concurrent marker version two");
+            markTestVersionReady(secondVersionId);
+            RetrievalIndexWorkContext first =
+                    insertProcessingRetrievalContext(documentId, firstVersionId);
+            RetrievalIndexWorkContext second =
+                    insertProcessingRetrievalContext(documentId, secondVersionId);
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+
+            Future<?> firstCompletion =
+                    executor.submit(
+                            () -> {
+                                awaitStart(ready, start);
+                                completeRetrievalIndex(
+                                        first,
+                                        firstUnitId,
+                                        "concurrent marker version one",
+                                        Instant.now());
+                            });
+            Future<?> secondCompletion =
+                    executor.submit(
+                            () -> {
+                                awaitStart(ready, start);
+                                completeRetrievalIndex(
+                                        second,
+                                        secondUnitId,
+                                        "concurrent marker version two",
+                                        Instant.now());
+                            });
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            firstCompletion.get(10, TimeUnit.SECONDS);
+            secondCompletion.get(10, TimeUnit.SECONDS);
+
+            assertRetrievalIndexStatus(first.retrievalIndexId(), "SUPERSEDED");
+            assertRetrievalIndexStatus(second.retrievalIndexId(), "READY");
+            assertRetrievalJobStatus(first.jobId(), "COMPLETED");
+            assertRetrievalJobStatus(second.jobId(), "COMPLETED");
+            assertSearchUsesOnlyVersion("concurrent", secondVersionId, firstVersionId);
+        } finally {
+            executor.shutdownNow();
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void vectorCapabilitiesRequireActiveCurrentReadyCompatibleContent() throws Exception {
+        UUID organizationId = UUID.randomUUID();
+        UUID workspaceId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        String organizationSlug = "capability-org-" + organizationId;
+        String workspaceSlug = "capability-workspace-" + workspaceId;
+        String marker = "capability-boundary";
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO organizations (id, slug, display_name) VALUES (?, ?, ?)",
+                    organizationId,
+                    organizationSlug,
+                    "Capability Test Organization");
+            jdbcTemplate.update(
+                    "INSERT INTO workspaces (id, organization_id, slug, display_name)"
+                            + " VALUES (?, ?, ?, ?)",
+                    workspaceId,
+                    organizationId,
+                    workspaceSlug,
+                    "Capability Test Workspace");
+            insertTestDocument(
+                    documentId, organizationId, workspaceId, "Capability boundary document");
+            insertTestVersion(
+                    versionId, documentId, organizationId, workspaceId, 1, "capabilities");
+            insertTestTextUnit(
+                    UUID.randomUUID(),
+                    versionId,
+                    organizationId,
+                    workspaceId,
+                    1,
+                    marker + " current vector content");
+            markTestVersionReady(versionId);
+            indexReadyVersions(versionId);
+
+            var current = retrievalCapabilities(organizationSlug, workspaceSlug);
+            assertThat(current.vectorAvailable()).isTrue();
+            assertThat(current.autoMode()).isEqualTo(RetrievalMode.HYBRID);
+
+            jdbcTemplate.update(
+                    "UPDATE documents SET status = 'ARCHIVED', archived_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    documentId);
+            var archivedOnly = retrievalCapabilities(organizationSlug, workspaceSlug);
+            assertThat(archivedOnly.vectorAvailable()).isFalse();
+            assertThat(archivedOnly.autoMode()).isEqualTo(RetrievalMode.LEXICAL);
+            assertThat(autoSearch(organizationSlug, workspaceSlug, marker).effectiveMode())
+                    .isEqualTo(RetrievalMode.LEXICAL);
+
+            jdbcTemplate.update(
+                    "UPDATE documents SET status = 'ACTIVE', archived_at = NULL WHERE id = ?",
+                    documentId);
+            jdbcTemplate.update(
+                    "UPDATE retrieval_indexes SET status = 'SUPERSEDED', ready_at = NULL,"
+                            + " superseded_at = CURRENT_TIMESTAMP WHERE document_version_id = ?",
+                    versionId);
+            var supersededOnly = retrievalCapabilities(organizationSlug, workspaceSlug);
+            assertThat(supersededOnly.vectorAvailable()).isFalse();
+            assertThat(supersededOnly.autoMode()).isEqualTo(RetrievalMode.LEXICAL);
+            assertThat(autoSearch(organizationSlug, workspaceSlug, marker).effectiveMode())
+                    .isEqualTo(RetrievalMode.LEXICAL);
+
+            jdbcTemplate.update(
+                    "UPDATE retrieval_indexes SET status = 'READY', ready_at = CURRENT_TIMESTAMP,"
+                            + " superseded_at = NULL WHERE document_version_id = ?",
+                    versionId);
+            var restoredCurrent = retrievalCapabilities(organizationSlug, workspaceSlug);
+            assertThat(restoredCurrent.vectorAvailable()).isTrue();
+            assertThat(restoredCurrent.autoMode()).isEqualTo(RetrievalMode.HYBRID);
+        } finally {
+            deleteTestDocument(documentId);
+            jdbcTemplate.update("DELETE FROM workspaces WHERE id = ?", workspaceId);
+            jdbcTemplate.update("DELETE FROM organizations WHERE id = ?", organizationId);
+        }
+    }
+
+    @Test
+    void retrievalModesReturnAuthorizedCitationsAndNeverLeakAnotherTenant() throws Exception {
+        UUID acmeDocumentId = UUID.randomUUID();
+        UUID acmeVersionId = UUID.randomUUID();
+        UUID globexDocumentId = UUID.randomUUID();
+        UUID globexVersionId = UUID.randomUUID();
+        String needle = "quasarledger";
+        try {
+            insertTestDocument(
+                    acmeDocumentId,
+                    ACME_ORGANIZATION_ID,
+                    ACME_WORKSPACE_ID,
+                    "Acme expense handbook");
+            insertTestVersion(
+                    acmeVersionId,
+                    acmeDocumentId,
+                    ACME_ORGANIZATION_ID,
+                    ACME_WORKSPACE_ID,
+                    1,
+                    "acme-search");
+            insertTestTextUnit(
+                    UUID.randomUUID(),
+                    acmeVersionId,
+                    ACME_ORGANIZATION_ID,
+                    ACME_WORKSPACE_ID,
+                    1,
+                    "The quasarledger expense limit is 450 credits.");
+            markTestVersionReady(acmeVersionId);
+
+            insertTestDocument(
+                    globexDocumentId,
+                    GLOBEX_ORGANIZATION_ID,
+                    GLOBEX_WORKSPACE_ID,
+                    "Globex confidential handbook");
+            insertTestVersion(
+                    globexVersionId,
+                    globexDocumentId,
+                    GLOBEX_ORGANIZATION_ID,
+                    GLOBEX_WORKSPACE_ID,
+                    1,
+                    "globex-search");
+            insertTestTextUnit(
+                    UUID.randomUUID(),
+                    globexVersionId,
+                    GLOBEX_ORGANIZATION_ID,
+                    GLOBEX_WORKSPACE_ID,
+                    1,
+                    "The quasarledger Globex secret is 999 credits.");
+            markTestVersionReady(globexVersionId);
+            indexReadyVersions(acmeVersionId, globexVersionId);
+
+            String memberToken = token(MEMBER_SUBJECT, List.of("MEMBER"), futureExpiry());
+            String base = "/api/v1/organizations/acme/workspaces/operations/retrieval";
+            HttpResponse<String> capabilities = get(base + "/capabilities", memberToken);
+            assertThat(capabilities.statusCode()).isEqualTo(200);
+            assertThat(capabilities.body())
+                    .contains(
+                            "\"lexicalAvailable\":true",
+                            "\"vectorAvailable\":true",
+                            "\"autoMode\":\"HYBRID\"");
+
+            for (String mode : List.of("LEXICAL", "VECTOR", "HYBRID", "AUTO")) {
+                HttpResponse<String> response =
+                        postJson(
+                                base + "/search",
+                                memberToken,
+                                "{\"query\":\""
+                                        + needle
+                                        + "\",\"mode\":\""
+                                        + mode
+                                        + "\",\"topK\":5}");
+                assertThat(response.statusCode()).isEqualTo(200);
+                assertThat(response.body())
+                        .contains(
+                                acmeDocumentId.toString(),
+                                acmeVersionId.toString(),
+                                "\"documentTitle\":\"Acme expense handbook\"",
+                                "\"versionNumber\":1",
+                                "\"locatorType\":\"DOCUMENT\"",
+                                "\"locatorValue\":\"body\"",
+                                "quasarledger expense limit")
+                        .doesNotContain(
+                                globexDocumentId.toString(),
+                                globexVersionId.toString(),
+                                "Globex confidential",
+                                "999 credits");
+            }
+        } finally {
+            deleteTestDocument(acmeDocumentId);
+            deleteTestDocument(globexDocumentId);
+        }
+    }
+
+    @Test
+    void retrievalUsesLastKnownGoodThenExcludesArchivedContentImmediately() throws Exception {
+        UUID documentId = UUID.randomUUID();
+        UUID firstVersionId = UUID.randomUUID();
+        UUID secondVersionId = UUID.randomUUID();
+        String memberToken = token(MEMBER_SUBJECT, List.of("MEMBER"), futureExpiry());
+        String searchPath = "/api/v1/organizations/acme/workspaces/operations/retrieval/search";
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(firstVersionId, documentId, 1, "last-good-v1");
+            insertTestTextUnit(
+                    UUID.randomUUID(), firstVersionId, 1, "heliotrope-old operational rule");
+            markTestVersionReady(firstVersionId);
+            indexReadyVersions(firstVersionId);
+
+            insertTestVersion(secondVersionId, documentId, 2, "last-good-v2");
+            HttpResponse<String> whileQueued =
+                    postJson(
+                            searchPath,
+                            memberToken,
+                            "{\"query\":\"heliotrope-old\",\"mode\":\"LEXICAL\"}");
+            assertThat(whileQueued.body()).contains(firstVersionId.toString());
+
+            insertTestTextUnit(
+                    UUID.randomUUID(), secondVersionId, 1, "heliotrope-new operational rule");
+            markTestVersionReady(secondVersionId);
+            indexReadyVersions(secondVersionId);
+            HttpResponse<String> afterPromotion =
+                    postJson(
+                            searchPath,
+                            memberToken,
+                            "{\"query\":\"heliotrope-old\",\"mode\":\"LEXICAL\"}");
+            assertThat(afterPromotion.body()).doesNotContain(firstVersionId.toString());
+
+            jdbcTemplate.update(
+                    "UPDATE documents SET status = 'ARCHIVED', archived_at = CURRENT_TIMESTAMP"
+                            + " WHERE id = ?",
+                    documentId);
+            HttpResponse<String> archived =
+                    postJson(
+                            searchPath,
+                            memberToken,
+                            "{\"query\":\"heliotrope-new\",\"mode\":\"HYBRID\"}");
+            assertThat(archived.statusCode()).isEqualTo(200);
+            assertThat(archived.body())
+                    .doesNotContain(
+                            documentId.toString(),
+                            secondVersionId.toString(),
+                            "heliotrope-new operational rule");
+            HttpResponse<String> archivedLexical =
+                    postJson(
+                            searchPath,
+                            memberToken,
+                            "{\"query\":\"heliotrope-new\",\"mode\":\"LEXICAL\"}");
+            assertThat(archivedLexical.statusCode()).isEqualTo(200);
+            assertThat(archivedLexical.body()).contains("\"results\":[]");
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void retrievalRejectsAuditorAndInvalidInputsWithoutDisclosingContent() throws Exception {
+        UUID profileId = insertTemporaryProfile("retrieval-auditor");
+        String subject =
+                jdbcTemplate.queryForObject(
+                        "SELECT identity_subject FROM user_profiles WHERE id = ?",
+                        String.class,
+                        profileId);
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO memberships"
+                            + " (id, user_profile_id, organization_id, workspace_id, role)"
+                            + " VALUES (?, ?, ?, NULL, 'AUDITOR')",
+                    UUID.randomUUID(),
+                    profileId,
+                    ACME_ORGANIZATION_ID);
+            String base = "/api/v1/organizations/acme/workspaces/operations/retrieval";
+            String auditorToken = token(subject, List.of("AUDITOR"), futureExpiry());
+            assertThat(get(base + "/capabilities", auditorToken).statusCode()).isEqualTo(403);
+            HttpResponse<String> denied =
+                    postJson(
+                            base + "/search",
+                            auditorToken,
+                            "{\"query\":\"confidential\",\"mode\":\"LEXICAL\"}");
+            assertThat(denied.statusCode()).isEqualTo(403);
+            assertThat(denied.body()).doesNotContain("snippet", "documentTitle", "confidential");
+
+            String memberToken = token(MEMBER_SUBJECT, List.of("MEMBER"), futureExpiry());
+            assertThat(
+                            postJson(
+                                            base + "/search",
+                                            memberToken,
+                                            "{\"query\":\"   \",\"mode\":\"AUTO\"}")
+                                    .statusCode())
+                    .isEqualTo(400);
+            assertThat(
+                            postJson(
+                                            base + "/search",
+                                            memberToken,
+                                            "{\"query\":\"valid\",\"topK\":999}")
+                                    .statusCode())
+                    .isEqualTo(400);
+        } finally {
+            deleteTemporaryProfile(profileId);
+        }
+    }
+
+    @Test
+    void goldenRetrievalEvaluationMeetsCommittedThresholdsAndWritesArtifact() throws Exception {
+        Path dataset =
+                Path.of("..", "..", "tests", "fixtures", "retrieval", "golden-retrieval.jsonl")
+                        .toAbsolutePath()
+                        .normalize();
+        List<GoldenRetrievalCase> cases =
+                Files.readAllLines(dataset, StandardCharsets.UTF_8).stream()
+                        .filter(line -> !line.isBlank())
+                        .map(line -> objectMapper.readValue(line, GoldenRetrievalCase.class))
+                        .toList();
+        assertThat(cases).hasSize(8);
+        assertThat(cases).extracting(GoldenRetrievalCase::datasetVersion).containsOnly("day4-v1");
+
+        Map<String, UUID> documents = new LinkedHashMap<>();
+        List<Map<String, Object>> caseResults = new ArrayList<>();
+        Map<String, Map<String, Double>> metricsByMode = new LinkedHashMap<>();
+        Map<String, Double> thresholds =
+                Map.of("recallAt1", 0.75, "recallAt3", 1.0, "recallAt5", 1.0, "mrr", 0.85);
+        try {
+            int sequence = 1;
+            for (GoldenRetrievalCase goldenCase : cases) {
+                UUID documentId = UUID.randomUUID();
+                UUID versionId = UUID.randomUUID();
+                documents.put(goldenCase.documentKey(), documentId);
+                insertTestDocument(
+                        documentId, ACME_ORGANIZATION_ID, ACME_WORKSPACE_ID, goldenCase.title());
+                insertTestVersion(
+                        versionId,
+                        documentId,
+                        ACME_ORGANIZATION_ID,
+                        ACME_WORKSPACE_ID,
+                        1,
+                        "golden-" + sequence++);
+                insertTestTextUnit(UUID.randomUUID(), versionId, 1, goldenCase.text());
+                markTestVersionReady(versionId);
+            }
+            indexReadyVersions(
+                    documents.values().stream()
+                            .map(
+                                    documentId ->
+                                            jdbcTemplate.queryForObject(
+                                                    "SELECT id FROM document_versions"
+                                                            + " WHERE document_id = ?",
+                                                    UUID.class,
+                                                    documentId))
+                            .toArray(UUID[]::new));
+
+            for (RetrievalMode mode :
+                    List.of(RetrievalMode.LEXICAL, RetrievalMode.VECTOR, RetrievalMode.HYBRID)) {
+                double reciprocalRankTotal = 0.0;
+                int recallAt1 = 0;
+                int recallAt3 = 0;
+                int recallAt5 = 0;
+                for (GoldenRetrievalCase goldenCase : cases) {
+                    UUID expectedDocumentId = documents.get(goldenCase.documentKey());
+                    RetrievalSearchResponse response =
+                            retrievalSearchService.search(
+                                    authentication(MEMBER_SUBJECT, "MEMBER"),
+                                    "acme",
+                                    "operations",
+                                    new RetrievalSearchRequest(goldenCase.query(), mode, 5));
+                    int rank = 0;
+                    for (int index = 0; index < response.results().size(); index++) {
+                        if (response.results()
+                                .get(index)
+                                .citation()
+                                .documentId()
+                                .equals(expectedDocumentId)) {
+                            rank = index + 1;
+                            break;
+                        }
+                    }
+                    recallAt1 += rank > 0 && rank <= 1 ? 1 : 0;
+                    recallAt3 += rank > 0 && rank <= 3 ? 1 : 0;
+                    recallAt5 += rank > 0 && rank <= 5 ? 1 : 0;
+                    reciprocalRankTotal += rank == 0 ? 0.0 : 1.0 / rank;
+                    caseResults.add(
+                            Map.of(
+                                    "mode", mode,
+                                    "query", goldenCase.query(),
+                                    "expectedDocumentKey", goldenCase.documentKey(),
+                                    "rank", rank,
+                                    "returnedDocumentIds",
+                                            response.results().stream()
+                                                    .map(result -> result.citation().documentId())
+                                                    .toList()));
+                }
+                double caseCount = cases.size();
+                metricsByMode.put(
+                        mode.name(),
+                        Map.of(
+                                "recallAt1", recallAt1 / caseCount,
+                                "recallAt3", recallAt3 / caseCount,
+                                "recallAt5", recallAt5 / caseCount,
+                                "mrr", reciprocalRankTotal / caseCount));
+            }
+
+            boolean passed =
+                    metricsByMode.values().stream()
+                            .flatMap(metrics -> metrics.entrySet().stream())
+                            .allMatch(entry -> entry.getValue() >= thresholds.get(entry.getKey()));
+            Map<String, Object> artifact = new LinkedHashMap<>();
+            artifact.put("datasetVersion", "day4-v1");
+            artifact.put("generatedAt", Instant.now().toString());
+            artifact.put("queryCount", cases.size());
+            artifact.put("modes", metricsByMode.keySet());
+            artifact.put("metricsByMode", metricsByMode);
+            artifact.put("thresholds", thresholds);
+            artifact.put("passed", passed);
+            artifact.put("cases", caseResults);
+            Path artifactPath = Path.of("target", "retrieval-evaluation.json");
+            Files.createDirectories(artifactPath.getParent());
+            objectMapper
+                    .writerWithDefaultPrettyPrinter()
+                    .writeValue(artifactPath.toFile(), artifact);
+
+            assertThat(metricsByMode)
+                    .allSatisfy(
+                            (mode, metrics) -> {
+                                assertThat(metrics.get("recallAt1"))
+                                        .as(mode + " Recall@1")
+                                        .isGreaterThanOrEqualTo(0.75);
+                                assertThat(metrics.get("recallAt3"))
+                                        .as(mode + " Recall@3")
+                                        .isGreaterThanOrEqualTo(1.0);
+                                assertThat(metrics.get("recallAt5"))
+                                        .as(mode + " Recall@5")
+                                        .isGreaterThanOrEqualTo(1.0);
+                                assertThat(metrics.get("mrr"))
+                                        .as(mode + " MRR")
+                                        .isGreaterThanOrEqualTo(0.85);
+                            });
+            assertThat(passed).isTrue();
+        } finally {
+            documents.values().forEach(this::deleteTestDocument);
+        }
+    }
+
     private HttpResponse<String> multipart(
             String path,
             String accessToken,
@@ -1145,6 +1879,20 @@ class EnterpriseAiApplicationIT {
                         .timeout(Duration.ofSeconds(10))
                         .header("Accept", "application/json")
                         .POST(HttpRequest.BodyPublishers.noBody());
+        if (accessToken != null) {
+            request.header("Authorization", "Bearer " + accessToken);
+        }
+        return HTTP_CLIENT.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> postJson(String path, String accessToken, String body)
+            throws IOException, InterruptedException {
+        HttpRequest.Builder request =
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+                        .timeout(Duration.ofSeconds(10))
+                        .header("Accept", "application/json")
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(body));
         if (accessToken != null) {
             request.header("Authorization", "Bearer " + accessToken);
         }
@@ -1321,17 +2069,40 @@ class EnterpriseAiApplicationIT {
     }
 
     private void insertTestDocument(UUID documentId) {
+        insertTestDocument(
+                documentId, ACME_ORGANIZATION_ID, ACME_WORKSPACE_ID, "Integration document");
+    }
+
+    private void insertTestDocument(
+            UUID documentId, UUID organizationId, UUID workspaceId, String title) {
         jdbcTemplate.update(
                 "INSERT INTO documents"
                         + " (id, organization_id, workspace_id, title, status, created_by_subject)"
-                        + " VALUES (?, ?, ?, 'Integration document', 'ACTIVE', 'integration-test')",
+                        + " VALUES (?, ?, ?, ?, 'ACTIVE', 'integration-test')",
                 documentId,
-                ACME_ORGANIZATION_ID,
-                ACME_WORKSPACE_ID);
+                organizationId,
+                workspaceId,
+                title);
     }
 
     private void insertTestVersion(
             UUID versionId, UUID documentId, int versionNumber, String keySuffix) {
+        insertTestVersion(
+                versionId,
+                documentId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID,
+                versionNumber,
+                keySuffix);
+    }
+
+    private void insertTestVersion(
+            UUID versionId,
+            UUID documentId,
+            UUID organizationId,
+            UUID workspaceId,
+            int versionNumber,
+            String keySuffix) {
         jdbcTemplate.update(
                 "INSERT INTO document_versions"
                         + " (id, document_id, organization_id, workspace_id, version_number,"
@@ -1341,14 +2112,25 @@ class EnterpriseAiApplicationIT {
                         + " 7, ?, ?, 'STORED', 'integration-test')",
                 versionId,
                 documentId,
-                ACME_ORGANIZATION_ID,
-                ACME_WORKSPACE_ID,
+                organizationId,
+                workspaceId,
                 versionNumber,
                 "a".repeat(64),
                 "integration/" + versionId + "/" + keySuffix);
     }
 
     private void insertTestTextUnit(UUID unitId, UUID versionId, int ordinal, String content) {
+        insertTestTextUnit(
+                unitId, versionId, ACME_ORGANIZATION_ID, ACME_WORKSPACE_ID, ordinal, content);
+    }
+
+    private void insertTestTextUnit(
+            UUID unitId,
+            UUID versionId,
+            UUID organizationId,
+            UUID workspaceId,
+            int ordinal,
+            String content) {
         jdbcTemplate.update(
                 "INSERT INTO document_text_units"
                         + " (id, document_version_id, organization_id, workspace_id, ordinal,"
@@ -1356,8 +2138,8 @@ class EnterpriseAiApplicationIT {
                         + " VALUES (?, ?, ?, ?, ?, 'DOCUMENT', 'body', ?, ?)",
                 unitId,
                 versionId,
-                ACME_ORGANIZATION_ID,
-                ACME_WORKSPACE_ID,
+                organizationId,
+                workspaceId,
                 ordinal,
                 content,
                 content.length());
@@ -1375,6 +2157,192 @@ class EnterpriseAiApplicationIT {
                 ACME_WORKSPACE_ID);
     }
 
+    private void insertTestRetrievalIndex(
+            UUID indexId, UUID documentId, UUID versionId, int generation) {
+        jdbcTemplate.update(
+                "INSERT INTO retrieval_indexes"
+                        + " (id, document_id, document_version_id, organization_id, workspace_id,"
+                        + " generation, status, chunker_name, chunker_version, chunk_size,"
+                        + " chunk_overlap)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', 'paragraph-whitespace', '1',"
+                        + " 1200, 150)",
+                indexId,
+                documentId,
+                versionId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID,
+                generation);
+    }
+
+    private void insertProcessingRetrievalJob(
+            UUID jobId, UUID indexId, UUID versionId, int attemptCount) {
+        jdbcTemplate.update(
+                "INSERT INTO retrieval_index_jobs"
+                        + " (id, retrieval_index_id, document_version_id, organization_id,"
+                        + " workspace_id, status, attempt_count, claimed_at)"
+                        + " VALUES (?, ?, ?, ?, ?, 'PROCESSING', ?, CURRENT_TIMESTAMP)",
+                jobId,
+                indexId,
+                versionId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID,
+                attemptCount);
+    }
+
+    private RetrievalIndexWorkContext insertProcessingRetrievalContext(
+            UUID documentId, UUID versionId) {
+        UUID indexId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        insertTestRetrievalIndex(indexId, documentId, versionId, 1);
+        jdbcTemplate.update(
+                "UPDATE retrieval_indexes SET status = 'PROCESSING',"
+                        + " embedding_provider = 'deterministic-smoke',"
+                        + " embedding_model = 'hashed-token-v1-test-only',"
+                        + " embedding_dimension = 64 WHERE id = ?",
+                indexId);
+        insertProcessingRetrievalJob(jobId, indexId, versionId, 1);
+        return new RetrievalIndexWorkContext(
+                jobId,
+                indexId,
+                documentId,
+                versionId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID,
+                1,
+                "deterministic-smoke",
+                "hashed-token-v1-test-only",
+                64);
+    }
+
+    private void completeRetrievalIndex(
+            RetrievalIndexWorkContext context,
+            UUID textUnitId,
+            String content,
+            Instant completedAt) {
+        float[] embedding = new float[64];
+        embedding[0] = 1.0f;
+        RetrievalChunkDraft chunk =
+                new RetrievalChunkDraft(
+                        UUID.randomUUID(),
+                        textUnitId,
+                        1,
+                        "DOCUMENT",
+                        "body",
+                        0,
+                        content.length(),
+                        content);
+        retrievalIndexLifecycleService.complete(
+                context, List.of(chunk), List.of(embedding), completedAt);
+    }
+
+    private void assertRetrievalIndexStatus(UUID indexId, String expectedStatus) {
+        assertThat(
+                        jdbcTemplate.queryForObject(
+                                "SELECT status FROM retrieval_indexes WHERE id = ?",
+                                String.class,
+                                indexId))
+                .isEqualTo(expectedStatus);
+    }
+
+    private void assertRetrievalJobStatus(UUID jobId, String expectedStatus) {
+        assertThat(
+                        jdbcTemplate.queryForObject(
+                                "SELECT status FROM retrieval_index_jobs WHERE id = ?",
+                                String.class,
+                                jobId))
+                .isEqualTo(expectedStatus);
+    }
+
+    private void assertSearchUsesOnlyVersion(
+            String query, UUID expectedVersionId, UUID excludedVersionId) {
+        RetrievalSearchResponse response =
+                retrievalSearchService.search(
+                        authentication(MEMBER_SUBJECT, "MEMBER"),
+                        "acme",
+                        "operations",
+                        new RetrievalSearchRequest(query, RetrievalMode.LEXICAL, 5));
+        assertThat(response.results())
+                .extracting(result -> result.citation().documentVersionId())
+                .contains(expectedVersionId)
+                .doesNotContain(excludedVersionId);
+    }
+
+    private io.github.yanziki.enterpriseai.retrieval.search.RetrievalCapabilitiesResponse
+            retrievalCapabilities(String organizationSlug, String workspaceSlug) {
+        return retrievalSearchService.capabilities(
+                authentication(ADMIN_SUBJECT, "PLATFORM_ADMIN"), organizationSlug, workspaceSlug);
+    }
+
+    private RetrievalSearchResponse autoSearch(
+            String organizationSlug, String workspaceSlug, String query) {
+        return retrievalSearchService.search(
+                authentication(ADMIN_SUBJECT, "PLATFORM_ADMIN"),
+                organizationSlug,
+                workspaceSlug,
+                new RetrievalSearchRequest(query, RetrievalMode.AUTO, 5));
+    }
+
+    private static void awaitStart(CountDownLatch ready, CountDownLatch start) {
+        ready.countDown();
+        try {
+            if (!start.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Concurrent retrieval completion did not start");
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Concurrent retrieval completion was interrupted", exception);
+        }
+    }
+
+    private void markTestVersionReady(UUID versionId) {
+        jdbcTemplate.update(
+                "UPDATE document_versions SET ingestion_status = 'READY',"
+                        + " parser_name = 'integration-test', parser_version = '1',"
+                        + " ready_at = CURRENT_TIMESTAMP WHERE id = ?",
+                versionId);
+    }
+
+    private void awaitRetrievalIndex(UUID versionId, String expectedStatus)
+            throws InterruptedException {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            List<String> statuses =
+                    jdbcTemplate.queryForList(
+                            "SELECT status FROM retrieval_indexes WHERE document_version_id = ?",
+                            String.class,
+                            versionId);
+            if (statuses.contains(expectedStatus)) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError(
+                "Retrieval index did not reach " + expectedStatus + " for version " + versionId);
+    }
+
+    private void indexReadyVersions(UUID... targetVersionIds) throws InterruptedException {
+        for (int pass = 0; pass < 100; pass++) {
+            retrievalIndexReconciler.enqueueMissingReadyVersions();
+            retrievalIndexJobClaimer
+                    .claimNextBatch(4, Instant.now().plusSeconds(1))
+                    .forEach(retrievalIndexProcessor::process);
+            int readyTargets = 0;
+            for (UUID versionId : targetVersionIds) {
+                Integer count =
+                        jdbcTemplate.queryForObject(
+                                "SELECT COUNT(*) FROM retrieval_indexes"
+                                        + " WHERE document_version_id = ? AND status = 'READY'",
+                                Integer.class,
+                                versionId);
+                readyTargets += count == null ? 0 : count;
+            }
+            if (readyTargets == targetVersionIds.length) {
+                return;
+            }
+            Thread.sleep(25);
+        }
+        throw new AssertionError("Retrieval targets did not become READY");
+    }
+
     private void assertDocumentStatus(UUID documentId, String expectedStatus) {
         assertThat(
                         jdbcTemplate.queryForObject(
@@ -1385,6 +2353,12 @@ class EnterpriseAiApplicationIT {
     }
 
     private void deleteTestDocument(UUID documentId) {
+        jdbcTemplate.update("DELETE FROM retrieval_chunks WHERE document_id = ?", documentId);
+        jdbcTemplate.update(
+                "DELETE FROM retrieval_index_jobs WHERE retrieval_index_id IN"
+                        + " (SELECT id FROM retrieval_indexes WHERE document_id = ?)",
+                documentId);
+        jdbcTemplate.update("DELETE FROM retrieval_indexes WHERE document_id = ?", documentId);
         jdbcTemplate.update(
                 "DELETE FROM document_text_units WHERE document_version_id IN"
                         + " (SELECT id FROM document_versions WHERE document_id = ?)",
@@ -1418,6 +2392,9 @@ class EnterpriseAiApplicationIT {
             return resultSet.getInt(1);
         }
     }
+
+    private record GoldenRetrievalCase(
+            String datasetVersion, String documentKey, String title, String text, String query) {}
 
     private static RSAKey createRsaKey() {
         try {

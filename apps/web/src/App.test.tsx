@@ -5,6 +5,8 @@ import type {
   CurrentUser,
   DocumentDetail,
   DocumentPage,
+  RetrievalCapabilities,
+  RetrievalSearchResponse,
   UploadAccepted,
 } from './api/client'
 import App from './App'
@@ -98,6 +100,44 @@ const readyDocumentDetail: DocumentDetail = {
   versions: [readyVersion],
 }
 
+const retrievalCapabilities: RetrievalCapabilities = {
+  lexicalAvailable: true,
+  vectorAvailable: true,
+  availableModes: ['AUTO', 'LEXICAL', 'VECTOR', 'HYBRID'],
+  autoMode: 'HYBRID',
+  embeddingProvider: 'deterministic-smoke',
+  embeddingModel: 'hashed-token-v1-test-only',
+  embeddingDimension: 64,
+}
+
+const retrievalResponse: RetrievalSearchResponse = {
+  query: 'expense approval',
+  requestedMode: 'AUTO',
+  effectiveMode: 'HYBRID',
+  topK: 5,
+  results: [
+    {
+      chunkId: '70000000-0000-0000-0000-000000000001',
+      rank: 1,
+      score: 0.032786,
+      lexicalScore: 1.25,
+      vectorScore: 0.81,
+      citation: {
+        documentId: readyVersion.documentId,
+        documentTitle: 'Acme synthetic policy',
+        documentVersionId: readyVersion.id,
+        versionNumber: 1,
+        locatorType: 'DOCUMENT',
+        locatorValue: 'body',
+        startCharacter: 0,
+        endCharacter: 57,
+        snippet:
+          'Travel expenses require manager approval before reimbursement.',
+      },
+    },
+  ],
+}
+
 function authenticatedFetch(
   profile: CurrentUser,
   options: {
@@ -106,6 +146,8 @@ function authenticatedFetch(
     documentPage?: DocumentPage
     documentDetail?: DocumentDetail
     uploadAccepted?: UploadAccepted
+    retrievalCapabilities?: RetrievalCapabilities
+    retrievalResponse?: RetrievalSearchResponse
   } = {},
 ) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -122,6 +164,15 @@ function authenticatedFetch(
     }
     if (path.endsWith('/documents') && init?.method === 'POST') {
       return jsonResponse(options.uploadAccepted ?? {}, 202)
+    }
+    if (path.endsWith('/retrieval/capabilities')) {
+      return jsonResponse(
+        options.retrievalCapabilities ?? retrievalCapabilities,
+        200,
+      )
+    }
+    if (path.endsWith('/retrieval/search') && init?.method === 'POST') {
+      return jsonResponse(options.retrievalResponse ?? retrievalResponse, 200)
     }
     if (path.includes('/documents/')) {
       return jsonResponse(options.documentDetail ?? {}, 200)
@@ -331,6 +382,50 @@ describe('App identity states', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('runs authorized retrieval and renders bounded citation provenance', async () => {
+    configureAuth({
+      isAuthenticated: true,
+      user: { access_token: 'synthetic-member-token' },
+    })
+    vi.stubGlobal(
+      'fetch',
+      authenticatedFetch(memberProfile, {
+        documentPage: readyDocumentPage,
+        retrievalResponse,
+      }),
+    )
+
+    render(<App />)
+    expect(
+      await screen.findByRole('heading', { name: 'Search indexed knowledge' }),
+    ).toBeInTheDocument()
+    expect(await screen.findByText('AUTO uses hybrid')).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'VECTOR' })).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText('Query'), 'expense approval')
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Search knowledge' }),
+    )
+
+    expect(
+      await screen.findByText(
+        'Travel expenses require manager approval before reimbursement.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getAllByText('v1')).toHaveLength(2)
+    expect(screen.getByText('document · body')).toBeInTheDocument()
+    expect(screen.getByText('0–57')).toBeInTheDocument()
+    const searchCall = vi
+      .mocked(fetch)
+      .mock.calls.find(([path]) =>
+        path.toString().endsWith('/retrieval/search'),
+      )
+    expect(searchCall?.[1]?.method).toBe('POST')
+    expect(searchCall?.[1]?.body).toBe(
+      JSON.stringify({ query: 'expense approval', mode: 'AUTO', topK: 5 }),
+    )
+  })
+
   it('shows tenant-admin upload validation and accepted processing state', async () => {
     const adminProfile: CurrentUser = {
       ...memberProfile,
@@ -413,6 +508,9 @@ describe('App identity states', () => {
     ).not.toBeInTheDocument()
     expect(
       screen.queryByRole('button', { name: 'Upload document' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Search indexed knowledge' }),
     ).not.toBeInTheDocument()
   })
 

@@ -5,11 +5,12 @@ traceable, human-supervised operations. The platform is being built as a secure
 modular monolith with a Spring Boot API, React web client, PostgreSQL with
 pgvector, and standards-based identity.
 
-> **Current milestone: Document ingestion and provenance.** Day 3 adds private
-> original storage, immutable provenance, durable asynchronous extraction, and
-> an access-controlled Knowledge workspace on top of the Day 2 identity and
-> tenant boundary. Retrieval, embeddings, RAG, LLM calls, chat, MCP, and business
-> workflows are still deliberately absent.
+> **Current milestone: Tenant-authorized hybrid retrieval and evaluation.** Day 4
+> turns READY normalized text into deterministic provenance chunks, durable
+> retrieval indexes, PostgreSQL lexical/vector candidates, RRF-fused cited search,
+> and a threshold-gated golden benchmark. Generated answers, RAG response
+> generation, chat, prompts, agents, MCP, tools, and workflows remain deliberately
+> absent.
 
 ## Problem statement
 
@@ -27,9 +28,9 @@ before those capabilities are introduced.
   Authorization Code Flow with PKCE. Tokens remain in tab-scoped session
   storage and are sent through one typed bearer-token API client.
 - `postgres`: PostgreSQL 17 with pgvector, Flyway-managed organizations,
-  workspaces, memberships, documents, immutable versions, ingestion jobs, and
-  ordered text units. Composite foreign keys enforce tenant ownership through
-  the complete document/provenance hierarchy.
+  workspaces, memberships, documents, immutable versions, ingestion/index jobs,
+  ordered text units, and cited retrieval chunks. Composite foreign keys enforce
+  tenant ownership through the complete provenance and retrieval hierarchy.
 - `keycloak`: pinned Keycloak 26.7.0 development container with a deterministic
   imported realm, public web client, API audience, and synthetic users.
 - `object-storage`: pinned MinIO development service with a private bucket. The
@@ -45,8 +46,9 @@ frontend offers only authorized organizations.
 
 See the [system context](docs/architecture/context.md),
 [document-ingestion architecture](docs/architecture/document-ingestion.md),
+[retrieval architecture](docs/architecture/retrieval.md),
 [technology stack](docs/architecture/technology-stack.md), and
-[document-ingestion threat model](docs/security/document-ingestion-threat-model.md).
+[retrieval threat model](docs/security/retrieval-threat-model.md).
 
 ## Repository structure
 
@@ -78,7 +80,7 @@ with `apps/web/pnpm-lock.yaml`.
 
 ## Local login
 
-Start the complete identity and document-ingestion stack:
+Start the complete identity, ingestion, indexing, and retrieval stack:
 
 ```bash
 cp .env.example .env
@@ -93,6 +95,7 @@ these development-only accounts:
 | `admin@example.com` | `AdminDevOnly123!` | `PLATFORM_ADMIN` | `TENANT_ADMIN` in Acme |
 | `member@example.com` | `MemberDevOnly123!` | `MEMBER` | `MEMBER` in Acme |
 | `other@example.com` | `OtherDevOnly123!` | `MEMBER` | `MEMBER` in Globex |
+| `auditor@example.com` | `AuditorDevOnly123!` | `AUDITOR` | `AUDITOR` in Acme |
 
 These credentials and the direct-grant smoke client are synthetic local/CI
 fixtures. Never reuse them or this Keycloak configuration in production.
@@ -105,9 +108,9 @@ The explicit `local`, `container`, and `test` profiles additionally load
 `classpath:db/devdata`, which contains the deterministic application fixtures as
 the idempotent repeatable migration `R__synthetic_identity_fixtures.sql`.
 Versioned migrations are reserved for durable schema evolution, so the fixture
-does not advance the schema version. Day 3 adds forward-only V3 for the document,
-version, job, and text-unit schema without modifying V1 or V2. If the repeatable
-fixture checksum changes,
+does not advance the schema version. Day 3 added V3 for document ingestion; Day 4
+adds forward-only V4 for retrieval indexes, durable index jobs, and chunks without
+modifying V1, V2, or V3. If the repeatable fixture checksum changes,
 Flyway reruns its `INSERT ... ON CONFLICT DO NOTHING` statements without deleting,
 overwriting, or duplicating existing fixture records. Synthetic application data
 and Keycloak users remain local/test-only.
@@ -159,6 +162,44 @@ The completed Knowledge UI and document provenance views are captured here:
 
 ![Immutable document version provenance](docs/assets/day-3-document-provenance.jpg)
 
+## Cited retrieval
+
+Day 4 completes this non-generative pipeline:
+
+`upload → durable extraction → provenance-preserving chunking → retrieval index → tenant-filtered lexical/vector candidates → RRF fusion → cited results`
+
+Only READY text units from ACTIVE documents are eligible. The scheduled reconciler
+backfills READY versions created before V4, and PostgreSQL-backed jobs claim work
+transactionally, recover stale claims, retry at most three times, and commit chunks
+with the READY transition. Normal search uses the newest READY index per logical
+document; the previous READY/indexed version remains available until the replacement
+index succeeds. Archival removes every version from candidate SQL immediately.
+
+Search supports `LEXICAL`, `VECTOR`, `HYBRID`, and `AUTO`. Lexical candidates use
+PostgreSQL full-text search; vectors use exact pgvector cosine distance; hybrid uses
+Reciprocal Rank Fusion with `k=60`. Tenant/workspace, ACTIVE-document, READY-version,
+and current-index predicates execute inside both candidate queries before ranking.
+Results expose immutable chunk, document, version, character-offset, and persisted
+page/document-locator provenance with bounded plain-text snippets.
+
+The base/production default has no embedding provider: lexical stays available,
+`AUTO` reports lexical, and explicit vector/hybrid requests fail with a controlled
+conflict. The local Compose/test profile explicitly uses a 64-dimensional
+`deterministic-smoke` hashed-token provider so CI can exercise vector plumbing
+without secrets, paid APIs, or internet. It is not a meaningful semantic model.
+Enabling any future remote provider would send normalized document text and search
+queries across an external trust boundary and requires explicit configuration plus
+organizational privacy/data-governance approval.
+
+| Role | Cited content search | Retrieval/index metadata |
+| --- | --- | --- |
+| `PLATFORM_ADMIN` | Any tenant | Yes |
+| `TENANT_ADMIN` | Authorized workspace | Yes |
+| `MEMBER` | Authorized workspace | Capabilities only |
+| `AUDITOR` | No (`403`) | Existing document provenance only |
+
+![Tenant-authorized cited hybrid search](docs/assets/day-4-cited-hybrid-search.png)
+
 ## Authorization behavior
 
 - `/api/v1/system/status` and Actuator health probes remain public.
@@ -194,6 +235,18 @@ authorized download with matching SHA-256, cross-tenant denial, anonymous object
 storage denial, and archive behavior. It uses only synthetic fixtures and never
 prints access tokens or storage credentials.
 
+Run the composed retrieval boundary demonstration:
+
+```bash
+make retrieval-verify
+```
+
+It uploads synthetic content, waits for ingestion/index readiness, validates index
+model provenance, exercises lexical/vector/hybrid/AUTO citations, proves `401`,
+Auditor and cross-tenant `403`, proves last-known-good new-version cutover, archives
+the document, and confirms its chunks disappear from normal search. No token,
+credential, object key, vector, or external provider is exposed.
+
 ## Verification
 
 Run the repository test suites and static checks:
@@ -217,13 +270,15 @@ docker compose up --build --detach --wait
 docker compose ps
 make identity-verify
 make knowledge-verify
+make retrieval-verify
 ```
 
 Backend integration tests require a working Docker daemon because they use a
 real pgvector-enabled PostgreSQL container, never H2. CI repeats both suites,
-builds the Compose stack, checks pgvector, and runs the identity/isolation and
-document-ingestion verifiers. The identity verifier also proves the repeatable
-local fixture was explicitly applied without recording version 900, confirms V3 is the latest versioned
+builds the Compose stack, checks pgvector, and runs identity, ingestion, and
+retrieval verifiers. The backend suite writes and CI publishes
+`retrieval-evaluation.json`. The identity verifier also proves the repeatable local
+fixture was explicitly applied without recording version 900, confirms V4 is the latest versioned
 migration, accepts same-organization and nullable-workspace memberships in
 rollback-only transactions, and confirms the database rejects Acme membership
 paired with the Globex Research workspace.
@@ -234,20 +289,23 @@ troubleshooting, follow the
 
 ## Explicitly unfinished
 
-Day 3 does not implement malware scanning, OCR, password-protected PDF support,
+Day 4 does not implement malware scanning, OCR, password-protected PDF support,
 Office/image/HTML/URL/ZIP ingestion, physical retention deletion, per-object
 encryption keys, separate production-grade object-storage identities, public
 registration, password reset, social login, production identity deployment,
-production secrets, billing, embeddings, vector search, retrieval, RAG, LLM
-calls, chat, MCP, audit business workflows, Redis, Kafka, Kubernetes, or cloud
-deployment. Extraction is bounded parsing, not a claim that uploaded content is
-safe. See the threat model before extending the supported format surface.
+production secrets, billing, a production embedding adapter, ANN indexes, model
+reindex orchestration, RAG answer generation, LLM calls, chat, prompts, reranking,
+agents, MCP, tool calling, audit business workflows, Redis, Kafka, Elasticsearch,
+OpenSearch, Kubernetes, or cloud deployment. Extraction is bounded parsing, not a
+claim that uploaded content is safe. The `simple` PostgreSQL tokenizer has limited
+stemming and CJK segmentation, and exact vector scans target the current bounded
+corpus rather than large-scale production workloads.
 
 Object storage and PostgreSQL are not written atomically. The API attempts a
 narrow compensating object delete when database persistence fails, but a process
 or container crash after the S3 write and before the metadata commit can leave an
 orphaned object. Production hardening must add reconciliation and bounded orphan
-garbage collection; Day 3 does not claim distributed transaction semantics.
+garbage collection; Day 4 does not claim distributed transaction semantics.
 
 ## Contribution workflow
 

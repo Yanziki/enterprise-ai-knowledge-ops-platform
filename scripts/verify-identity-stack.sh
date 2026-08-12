@@ -192,7 +192,7 @@ assert_database_scalar 1 'pgvector extension is installed' \
   "SELECT COUNT(*) FROM pg_extension WHERE extname = 'vector';"
 assert_database_scalar 0 'no version 900 migration is recorded' \
   "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '900' AND success;"
-assert_database_scalar 3 'latest successful versioned migration is V3' \
+assert_database_scalar 4 'latest successful versioned migration is V4' \
   "SELECT MAX(version::integer) FROM flyway_schema_history WHERE success AND version ~ '^[0-9]+$';"
 assert_database_scalar 1 'repeatable development fixture is applied successfully' \
   "SELECT CASE WHEN COUNT(*) >= 1 THEN 1 ELSE 0 END FROM flyway_schema_history WHERE version IS NULL AND description = 'synthetic identity fixtures' AND success;"
@@ -200,9 +200,9 @@ assert_database_scalar 2 'development organizations are loaded' \
   'SELECT COUNT(*) FROM organizations;'
 assert_database_scalar 2 'development workspaces are loaded' \
   'SELECT COUNT(*) FROM workspaces;'
-assert_database_scalar 3 'development profiles are loaded' \
+assert_database_scalar 4 'development profiles are loaded' \
   'SELECT COUNT(*) FROM user_profiles;'
-assert_database_scalar 3 'development memberships are loaded' \
+assert_database_scalar 4 'development memberships are loaded' \
   'SELECT COUNT(*) FROM memberships;'
 verify_workspace_ownership_invariant
 

@@ -3,8 +3,9 @@
 ## System context
 
 The platform sits between enterprise users and approved enterprise knowledge or
-operations systems. Day 3 adds private document storage and durable extraction
-behind the existing authenticated-user and tenant-authorization boundary.
+operations systems. Days 3–4 add private document storage, durable extraction,
+tenant-authorized retrieval indexing, and cited search behind the existing
+authenticated-user and tenant-authorization boundary.
 
 ```mermaid
 flowchart LR
@@ -65,7 +66,10 @@ published to browsers.
 7. **Parser boundary:** filenames, MIME declarations, binaries, and extracted text
    are untrusted. Detection, size/page/text limits, safe failures, and plain-text
    rendering constrain processing; malware scanning remains a documented gap.
-8. **Model/tool boundary (planned):** prompts, retrieved content, tool arguments,
+8. **Embedding boundary:** no remote provider is enabled by default. Explicitly
+   enabling one would disclose normalized text and queries and requires governance
+   approval. The local deterministic provider never leaves the process.
+9. **Model/tool boundary (planned):** prompts, retrieved content, tool arguments,
    and outputs are untrusted data subject to authorization and audit controls.
 
 ## Planned external dependencies

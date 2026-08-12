@@ -6,7 +6,12 @@ import java.util.Set;
 public enum WorkspaceAccessRole {
     PLATFORM_ADMIN(4, EnumSet.allOf(WorkspaceOperation.class)),
     TENANT_ADMIN(3, EnumSet.allOf(WorkspaceOperation.class)),
-    MEMBER(2, EnumSet.of(WorkspaceOperation.READ_METADATA, WorkspaceOperation.DOWNLOAD_ORIGINAL)),
+    MEMBER(
+            2,
+            EnumSet.of(
+                    WorkspaceOperation.READ_METADATA,
+                    WorkspaceOperation.DOWNLOAD_ORIGINAL,
+                    WorkspaceOperation.SEARCH_CONTENT)),
     AUDITOR(1, EnumSet.of(WorkspaceOperation.READ_METADATA));
 
     private final int privilege;

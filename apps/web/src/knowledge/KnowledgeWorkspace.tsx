@@ -14,6 +14,7 @@ import {
   type DocumentSummary,
   type DocumentVersion,
 } from '../api/client'
+import { KnowledgeSearch } from './KnowledgeSearch'
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024
 const SUPPORTED_EXTENSIONS = ['.pdf', '.txt', '.md', '.markdown']
@@ -69,6 +70,10 @@ export function KnowledgeWorkspace({
     (user.platformRoles.includes('TENANT_ADMIN') &&
       selectedOrganization?.role === 'TENANT_ADMIN')
   const canDownload =
+    canManage ||
+    (user.platformRoles.includes('MEMBER') &&
+      selectedOrganization?.role === 'MEMBER')
+  const canSearch =
     canManage ||
     (user.platformRoles.includes('MEMBER') &&
       selectedOrganization?.role === 'MEMBER')
@@ -293,7 +298,7 @@ export function KnowledgeWorkspace({
           <h2 id="knowledge-title">Knowledge workspace</h2>
           <p>
             Private originals, immutable provenance, and durable asynchronous
-            extraction. No RAG or LLM functionality is active.
+            extraction feed tenant-authorized lexical and vector retrieval.
           </p>
         </div>
         <div className="knowledge-selectors">
@@ -380,6 +385,14 @@ export function KnowledgeWorkspace({
           </button>
           <RequestMessage state={uploadState} />
         </form>
+      )}
+
+      {canSearch && (
+        <KnowledgeSearch
+          api={api}
+          organizationSlug={organizationSlug}
+          workspaceSlug={workspaceSlug}
+        />
       )}
 
       <div className="document-panel">

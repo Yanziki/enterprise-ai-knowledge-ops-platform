@@ -165,7 +165,7 @@ function ProtectedDashboard({
   }
 
   return (
-    <PageShell milestone="Document ingestion & provenance" onLogout={onLogout}>
+    <PageShell milestone="Authorized hybrid retrieval" onLogout={onLogout}>
       <main className="dashboard" id="top">
         <section className="dashboard-intro" aria-labelledby="dashboard-title">
           <p className="eyebrow">Protected knowledge operations</p>
@@ -412,13 +412,15 @@ function PlannedModules() {
     <section className="modules" aria-labelledby="modules-title">
       <div className="section-heading">
         <p className="eyebrow">Platform boundaries</p>
-        <h2 id="modules-title">Knowledge is active. AI remains planned.</h2>
+        <h2 id="modules-title">
+          Knowledge retrieval is active. Generation remains planned.
+        </h2>
       </div>
       <ul className="module-grid">
         <li className="module-card module-card--active">
           <span className="module-number">01</span>
           <h3>Knowledge</h3>
-          <p>Governed originals and provenance-aware normalized content.</p>
+          <p>Governed originals, deterministic indexes, and cited retrieval.</p>
           <span className="planned">Active milestone</span>
         </li>
         {futureModules.map(([name, description], index) => (
@@ -460,8 +462,8 @@ function PageShell({
       </header>
       {children}
       <footer>
-        <span>Private ingestion and provenance foundation</span>
-        <span>No RAG or LLM functionality yet</span>
+        <span>Private ingestion and authorized retrieval foundation</span>
+        <span>No generation, chat, or LLM functionality</span>
       </footer>
     </div>
   )
