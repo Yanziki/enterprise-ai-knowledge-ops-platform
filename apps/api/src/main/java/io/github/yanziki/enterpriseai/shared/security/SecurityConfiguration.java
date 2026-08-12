@@ -79,7 +79,9 @@ public class SecurityConfiguration {
                                         .authenticated()
                                         .requestMatchers(
                                                 "/api/v1/organizations/*/workspaces/*/documents",
-                                                "/api/v1/organizations/*/workspaces/*/documents/**")
+                                                "/api/v1/organizations/*/workspaces/*/documents/**",
+                                                "/api/v1/organizations/*/workspaces/*/retrieval",
+                                                "/api/v1/organizations/*/workspaces/*/retrieval/**")
                                         .authenticated()
                                         .anyRequest()
                                         .denyAll())

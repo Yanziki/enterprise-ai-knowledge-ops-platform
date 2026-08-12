@@ -1264,6 +1264,207 @@ class EnterpriseAiApplicationIT {
         }
     }
 
+    @Test
+    void retrievalModesReturnAuthorizedCitationsAndNeverLeakAnotherTenant() throws Exception {
+        UUID acmeDocumentId = UUID.randomUUID();
+        UUID acmeVersionId = UUID.randomUUID();
+        UUID globexDocumentId = UUID.randomUUID();
+        UUID globexVersionId = UUID.randomUUID();
+        String needle = "quasarledger";
+        try {
+            insertTestDocument(
+                    acmeDocumentId,
+                    ACME_ORGANIZATION_ID,
+                    ACME_WORKSPACE_ID,
+                    "Acme expense handbook");
+            insertTestVersion(
+                    acmeVersionId,
+                    acmeDocumentId,
+                    ACME_ORGANIZATION_ID,
+                    ACME_WORKSPACE_ID,
+                    1,
+                    "acme-search");
+            insertTestTextUnit(
+                    UUID.randomUUID(),
+                    acmeVersionId,
+                    ACME_ORGANIZATION_ID,
+                    ACME_WORKSPACE_ID,
+                    1,
+                    "The quasarledger expense limit is 450 credits.");
+            markTestVersionReady(acmeVersionId);
+
+            insertTestDocument(
+                    globexDocumentId,
+                    GLOBEX_ORGANIZATION_ID,
+                    GLOBEX_WORKSPACE_ID,
+                    "Globex confidential handbook");
+            insertTestVersion(
+                    globexVersionId,
+                    globexDocumentId,
+                    GLOBEX_ORGANIZATION_ID,
+                    GLOBEX_WORKSPACE_ID,
+                    1,
+                    "globex-search");
+            insertTestTextUnit(
+                    UUID.randomUUID(),
+                    globexVersionId,
+                    GLOBEX_ORGANIZATION_ID,
+                    GLOBEX_WORKSPACE_ID,
+                    1,
+                    "The quasarledger Globex secret is 999 credits.");
+            markTestVersionReady(globexVersionId);
+            indexReadyVersions(acmeVersionId, globexVersionId);
+
+            String memberToken = token(MEMBER_SUBJECT, List.of("MEMBER"), futureExpiry());
+            String base = "/api/v1/organizations/acme/workspaces/operations/retrieval";
+            HttpResponse<String> capabilities = get(base + "/capabilities", memberToken);
+            assertThat(capabilities.statusCode()).isEqualTo(200);
+            assertThat(capabilities.body())
+                    .contains(
+                            "\"lexicalAvailable\":true",
+                            "\"vectorAvailable\":true",
+                            "\"autoMode\":\"HYBRID\"");
+
+            for (String mode : List.of("LEXICAL", "VECTOR", "HYBRID", "AUTO")) {
+                HttpResponse<String> response =
+                        postJson(
+                                base + "/search",
+                                memberToken,
+                                "{\"query\":\""
+                                        + needle
+                                        + "\",\"mode\":\""
+                                        + mode
+                                        + "\",\"topK\":5}");
+                assertThat(response.statusCode()).isEqualTo(200);
+                assertThat(response.body())
+                        .contains(
+                                acmeDocumentId.toString(),
+                                acmeVersionId.toString(),
+                                "\"documentTitle\":\"Acme expense handbook\"",
+                                "\"versionNumber\":1",
+                                "\"locatorType\":\"DOCUMENT\"",
+                                "\"locatorValue\":\"body\"",
+                                "quasarledger expense limit")
+                        .doesNotContain(
+                                globexDocumentId.toString(),
+                                globexVersionId.toString(),
+                                "Globex confidential",
+                                "999 credits");
+            }
+        } finally {
+            deleteTestDocument(acmeDocumentId);
+            deleteTestDocument(globexDocumentId);
+        }
+    }
+
+    @Test
+    void retrievalUsesLastKnownGoodThenExcludesArchivedContentImmediately() throws Exception {
+        UUID documentId = UUID.randomUUID();
+        UUID firstVersionId = UUID.randomUUID();
+        UUID secondVersionId = UUID.randomUUID();
+        String memberToken = token(MEMBER_SUBJECT, List.of("MEMBER"), futureExpiry());
+        String searchPath = "/api/v1/organizations/acme/workspaces/operations/retrieval/search";
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(firstVersionId, documentId, 1, "last-good-v1");
+            insertTestTextUnit(
+                    UUID.randomUUID(), firstVersionId, 1, "heliotrope-old operational rule");
+            markTestVersionReady(firstVersionId);
+            indexReadyVersions(firstVersionId);
+
+            insertTestVersion(secondVersionId, documentId, 2, "last-good-v2");
+            HttpResponse<String> whileQueued =
+                    postJson(
+                            searchPath,
+                            memberToken,
+                            "{\"query\":\"heliotrope-old\",\"mode\":\"LEXICAL\"}");
+            assertThat(whileQueued.body()).contains(firstVersionId.toString());
+
+            insertTestTextUnit(
+                    UUID.randomUUID(), secondVersionId, 1, "heliotrope-new operational rule");
+            markTestVersionReady(secondVersionId);
+            indexReadyVersions(secondVersionId);
+            HttpResponse<String> afterPromotion =
+                    postJson(
+                            searchPath,
+                            memberToken,
+                            "{\"query\":\"heliotrope-old\",\"mode\":\"LEXICAL\"}");
+            assertThat(afterPromotion.body()).doesNotContain(firstVersionId.toString());
+
+            jdbcTemplate.update(
+                    "UPDATE documents SET status = 'ARCHIVED', archived_at = CURRENT_TIMESTAMP"
+                            + " WHERE id = ?",
+                    documentId);
+            HttpResponse<String> archived =
+                    postJson(
+                            searchPath,
+                            memberToken,
+                            "{\"query\":\"heliotrope-new\",\"mode\":\"HYBRID\"}");
+            assertThat(archived.statusCode()).isEqualTo(200);
+            assertThat(archived.body())
+                    .doesNotContain(
+                            documentId.toString(),
+                            secondVersionId.toString(),
+                            "heliotrope-new operational rule");
+            HttpResponse<String> archivedLexical =
+                    postJson(
+                            searchPath,
+                            memberToken,
+                            "{\"query\":\"heliotrope-new\",\"mode\":\"LEXICAL\"}");
+            assertThat(archivedLexical.statusCode()).isEqualTo(200);
+            assertThat(archivedLexical.body()).contains("\"results\":[]");
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void retrievalRejectsAuditorAndInvalidInputsWithoutDisclosingContent() throws Exception {
+        UUID profileId = insertTemporaryProfile("retrieval-auditor");
+        String subject =
+                jdbcTemplate.queryForObject(
+                        "SELECT identity_subject FROM user_profiles WHERE id = ?",
+                        String.class,
+                        profileId);
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO memberships"
+                            + " (id, user_profile_id, organization_id, workspace_id, role)"
+                            + " VALUES (?, ?, ?, NULL, 'AUDITOR')",
+                    UUID.randomUUID(),
+                    profileId,
+                    ACME_ORGANIZATION_ID);
+            String base = "/api/v1/organizations/acme/workspaces/operations/retrieval";
+            String auditorToken = token(subject, List.of("AUDITOR"), futureExpiry());
+            assertThat(get(base + "/capabilities", auditorToken).statusCode()).isEqualTo(403);
+            HttpResponse<String> denied =
+                    postJson(
+                            base + "/search",
+                            auditorToken,
+                            "{\"query\":\"confidential\",\"mode\":\"LEXICAL\"}");
+            assertThat(denied.statusCode()).isEqualTo(403);
+            assertThat(denied.body()).doesNotContain("snippet", "documentTitle", "confidential");
+
+            String memberToken = token(MEMBER_SUBJECT, List.of("MEMBER"), futureExpiry());
+            assertThat(
+                            postJson(
+                                            base + "/search",
+                                            memberToken,
+                                            "{\"query\":\"   \",\"mode\":\"AUTO\"}")
+                                    .statusCode())
+                    .isEqualTo(400);
+            assertThat(
+                            postJson(
+                                            base + "/search",
+                                            memberToken,
+                                            "{\"query\":\"valid\",\"topK\":999}")
+                                    .statusCode())
+                    .isEqualTo(400);
+        } finally {
+            deleteTemporaryProfile(profileId);
+        }
+    }
+
     private HttpResponse<String> multipart(
             String path,
             String accessToken,
@@ -1310,6 +1511,20 @@ class EnterpriseAiApplicationIT {
                         .timeout(Duration.ofSeconds(10))
                         .header("Accept", "application/json")
                         .POST(HttpRequest.BodyPublishers.noBody());
+        if (accessToken != null) {
+            request.header("Authorization", "Bearer " + accessToken);
+        }
+        return HTTP_CLIENT.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> postJson(String path, String accessToken, String body)
+            throws IOException, InterruptedException {
+        HttpRequest.Builder request =
+                HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+                        .timeout(Duration.ofSeconds(10))
+                        .header("Accept", "application/json")
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(body));
         if (accessToken != null) {
             request.header("Authorization", "Bearer " + accessToken);
         }
@@ -1486,17 +1701,40 @@ class EnterpriseAiApplicationIT {
     }
 
     private void insertTestDocument(UUID documentId) {
+        insertTestDocument(
+                documentId, ACME_ORGANIZATION_ID, ACME_WORKSPACE_ID, "Integration document");
+    }
+
+    private void insertTestDocument(
+            UUID documentId, UUID organizationId, UUID workspaceId, String title) {
         jdbcTemplate.update(
                 "INSERT INTO documents"
                         + " (id, organization_id, workspace_id, title, status, created_by_subject)"
-                        + " VALUES (?, ?, ?, 'Integration document', 'ACTIVE', 'integration-test')",
+                        + " VALUES (?, ?, ?, ?, 'ACTIVE', 'integration-test')",
                 documentId,
-                ACME_ORGANIZATION_ID,
-                ACME_WORKSPACE_ID);
+                organizationId,
+                workspaceId,
+                title);
     }
 
     private void insertTestVersion(
             UUID versionId, UUID documentId, int versionNumber, String keySuffix) {
+        insertTestVersion(
+                versionId,
+                documentId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID,
+                versionNumber,
+                keySuffix);
+    }
+
+    private void insertTestVersion(
+            UUID versionId,
+            UUID documentId,
+            UUID organizationId,
+            UUID workspaceId,
+            int versionNumber,
+            String keySuffix) {
         jdbcTemplate.update(
                 "INSERT INTO document_versions"
                         + " (id, document_id, organization_id, workspace_id, version_number,"
@@ -1506,14 +1744,25 @@ class EnterpriseAiApplicationIT {
                         + " 7, ?, ?, 'STORED', 'integration-test')",
                 versionId,
                 documentId,
-                ACME_ORGANIZATION_ID,
-                ACME_WORKSPACE_ID,
+                organizationId,
+                workspaceId,
                 versionNumber,
                 "a".repeat(64),
                 "integration/" + versionId + "/" + keySuffix);
     }
 
     private void insertTestTextUnit(UUID unitId, UUID versionId, int ordinal, String content) {
+        insertTestTextUnit(
+                unitId, versionId, ACME_ORGANIZATION_ID, ACME_WORKSPACE_ID, ordinal, content);
+    }
+
+    private void insertTestTextUnit(
+            UUID unitId,
+            UUID versionId,
+            UUID organizationId,
+            UUID workspaceId,
+            int ordinal,
+            String content) {
         jdbcTemplate.update(
                 "INSERT INTO document_text_units"
                         + " (id, document_version_id, organization_id, workspace_id, ordinal,"
@@ -1521,8 +1770,8 @@ class EnterpriseAiApplicationIT {
                         + " VALUES (?, ?, ?, ?, ?, 'DOCUMENT', 'body', ?, ?)",
                 unitId,
                 versionId,
-                ACME_ORGANIZATION_ID,
-                ACME_WORKSPACE_ID,
+                organizationId,
+                workspaceId,
                 ordinal,
                 content,
                 content.length());
@@ -1595,6 +1844,30 @@ class EnterpriseAiApplicationIT {
         }
         throw new AssertionError(
                 "Retrieval index did not reach " + expectedStatus + " for version " + versionId);
+    }
+
+    private void indexReadyVersions(UUID... targetVersionIds) throws InterruptedException {
+        for (int pass = 0; pass < 100; pass++) {
+            retrievalIndexReconciler.enqueueMissingReadyVersions();
+            retrievalIndexJobClaimer
+                    .claimNextBatch(4, Instant.now().plusSeconds(1))
+                    .forEach(retrievalIndexProcessor::process);
+            int readyTargets = 0;
+            for (UUID versionId : targetVersionIds) {
+                Integer count =
+                        jdbcTemplate.queryForObject(
+                                "SELECT COUNT(*) FROM retrieval_indexes"
+                                        + " WHERE document_version_id = ? AND status = 'READY'",
+                                Integer.class,
+                                versionId);
+                readyTargets += count == null ? 0 : count;
+            }
+            if (readyTargets == targetVersionIds.length) {
+                return;
+            }
+            Thread.sleep(25);
+        }
+        throw new AssertionError("Retrieval targets did not become READY");
     }
 
     private void assertDocumentStatus(UUID documentId, String expectedStatus) {
