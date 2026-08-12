@@ -112,26 +112,29 @@ public class RetrievalIndexLifecycleService {
             float[] embedding = embeddings.isEmpty() ? null : embeddings.get(offset);
             insertChunk(context, chunk, embedding);
         }
-        jdbcTemplate.update(
-                """
-                UPDATE retrieval_indexes AS older
-                SET status = 'SUPERSEDED',
-                    ready_at = NULL,
-                    superseded_at = ?
-                WHERE older.document_id = ?
-                  AND older.organization_id = ?
-                  AND older.workspace_id = ?
-                  AND older.id <> ?
-                  AND older.status = 'READY'
-                """,
-                Timestamp.from(completedAt),
-                context.documentId(),
-                context.organizationId(),
-                context.workspaceId(),
-                context.retrievalIndexId());
-        int indexUpdates =
-                jdbcTemplate.update(
-                        """
+
+        int completingVersionNumber = lockDocumentAndReadVersionNumber(context);
+        boolean newerReadyIndexExists = hasNewerReadyIndex(context, completingVersionNumber);
+        int indexUpdates;
+        if (newerReadyIndexExists) {
+            indexUpdates =
+                    jdbcTemplate.update(
+                            """
+                            UPDATE retrieval_indexes
+                            SET status = 'SUPERSEDED',
+                                ready_at = NULL,
+                                superseded_at = ?,
+                                failure_code = NULL,
+                                failure_message = NULL
+                            WHERE id = ? AND status = 'PROCESSING'
+                            """,
+                            Timestamp.from(completedAt),
+                            context.retrievalIndexId());
+        } else {
+            supersedeOlderReadyIndexes(context, completingVersionNumber, completedAt);
+            indexUpdates =
+                    jdbcTemplate.update(
+                            """
                         UPDATE retrieval_indexes
                         SET status = 'READY',
                             ready_at = ?,
@@ -140,8 +143,9 @@ public class RetrievalIndexLifecycleService {
                             failure_message = NULL
                         WHERE id = ? AND status = 'PROCESSING'
                         """,
-                        Timestamp.from(completedAt),
-                        context.retrievalIndexId());
+                            Timestamp.from(completedAt),
+                            context.retrievalIndexId());
+        }
         int jobUpdates =
                 jdbcTemplate.update(
                         """
@@ -160,6 +164,103 @@ public class RetrievalIndexLifecycleService {
         if (indexUpdates != 1 || jobUpdates != 1) {
             throw new IllegalStateException("Retrieval index completion lost its claimed state");
         }
+    }
+
+    private int lockDocumentAndReadVersionNumber(RetrievalIndexWorkContext context) {
+        List<Integer> versionNumbers =
+                jdbcTemplate.queryForList(
+                        """
+                        SELECT version.version_number
+                        FROM documents AS document
+                        JOIN document_versions AS version
+                          ON version.document_id = document.id
+                         AND version.organization_id = document.organization_id
+                         AND version.workspace_id = document.workspace_id
+                        WHERE document.id = ?
+                          AND document.organization_id = ?
+                          AND document.workspace_id = ?
+                          AND version.id = ?
+                        FOR UPDATE OF document
+                        """,
+                        Integer.class,
+                        context.documentId(),
+                        context.organizationId(),
+                        context.workspaceId(),
+                        context.documentVersionId());
+        if (versionNumbers.size() != 1) {
+            throw new IllegalStateException("Retrieval index lost its scoped document version");
+        }
+        return versionNumbers.getFirst();
+    }
+
+    private boolean hasNewerReadyIndex(
+            RetrievalIndexWorkContext context, int completingVersionNumber) {
+        Boolean newerExists =
+                jdbcTemplate.queryForObject(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM retrieval_indexes AS candidate
+                            JOIN document_versions AS version
+                              ON version.id = candidate.document_version_id
+                             AND version.document_id = candidate.document_id
+                             AND version.organization_id = candidate.organization_id
+                             AND version.workspace_id = candidate.workspace_id
+                            WHERE candidate.document_id = ?
+                              AND candidate.organization_id = ?
+                              AND candidate.workspace_id = ?
+                              AND candidate.status = 'READY'
+                              AND (
+                                  version.version_number > ?
+                                  OR (
+                                      version.version_number = ?
+                                      AND candidate.generation > ?
+                                  )
+                              )
+                        )
+                        """,
+                        Boolean.class,
+                        context.documentId(),
+                        context.organizationId(),
+                        context.workspaceId(),
+                        completingVersionNumber,
+                        completingVersionNumber,
+                        context.generation());
+        return Boolean.TRUE.equals(newerExists);
+    }
+
+    private void supersedeOlderReadyIndexes(
+            RetrievalIndexWorkContext context, int completingVersionNumber, Instant completedAt) {
+        jdbcTemplate.update(
+                """
+                UPDATE retrieval_indexes AS older
+                SET status = 'SUPERSEDED',
+                    ready_at = NULL,
+                    superseded_at = ?
+                FROM document_versions AS version
+                WHERE version.id = older.document_version_id
+                  AND version.document_id = older.document_id
+                  AND version.organization_id = older.organization_id
+                  AND version.workspace_id = older.workspace_id
+                  AND older.document_id = ?
+                  AND older.organization_id = ?
+                  AND older.workspace_id = ?
+                  AND older.status = 'READY'
+                  AND (
+                      version.version_number < ?
+                      OR (
+                          version.version_number = ?
+                          AND older.generation < ?
+                      )
+                  )
+                """,
+                Timestamp.from(completedAt),
+                context.documentId(),
+                context.organizationId(),
+                context.workspaceId(),
+                completingVersionNumber,
+                completingVersionNumber,
+                context.generation());
     }
 
     @Transactional

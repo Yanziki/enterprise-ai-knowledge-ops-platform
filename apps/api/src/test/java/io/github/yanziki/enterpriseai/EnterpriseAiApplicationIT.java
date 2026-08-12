@@ -19,9 +19,12 @@ import io.github.yanziki.enterpriseai.knowledge.storage.ObjectStorageException;
 import io.github.yanziki.enterpriseai.knowledge.storage.StagedUpload;
 import io.github.yanziki.enterpriseai.knowledge.storage.StorageProperties;
 import io.github.yanziki.enterpriseai.retrieval.RetrievalMode;
+import io.github.yanziki.enterpriseai.retrieval.chunking.RetrievalChunkDraft;
 import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexJobClaimer;
+import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexLifecycleService;
 import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexProcessor;
 import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexReconciler;
+import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexWorkContext;
 import io.github.yanziki.enterpriseai.retrieval.search.RetrievalSearchRequest;
 import io.github.yanziki.enterpriseai.retrieval.search.RetrievalSearchResponse;
 import io.github.yanziki.enterpriseai.retrieval.search.RetrievalSearchService;
@@ -56,6 +59,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -189,6 +197,8 @@ class EnterpriseAiApplicationIT {
     @Autowired private RetrievalIndexReconciler retrievalIndexReconciler;
 
     @Autowired private RetrievalIndexJobClaimer retrievalIndexJobClaimer;
+
+    @Autowired private RetrievalIndexLifecycleService retrievalIndexLifecycleService;
 
     @Autowired private RetrievalIndexProcessor retrievalIndexProcessor;
 
@@ -1275,6 +1285,215 @@ class EnterpriseAiApplicationIT {
     }
 
     @Test
+    void olderIndexCompletingAfterNewerIndexCannotRegressCurrentVersion() throws Exception {
+        UUID documentId = UUID.randomUUID();
+        UUID firstVersionId = UUID.randomUUID();
+        UUID secondVersionId = UUID.randomUUID();
+        UUID firstUnitId = UUID.randomUUID();
+        UUID secondUnitId = UUID.randomUUID();
+        String marker = "monotonic-cutover";
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(firstVersionId, documentId, 1, "out-of-order-v1");
+            insertTestTextUnit(firstUnitId, firstVersionId, 1, marker + " obsolete version one");
+            markTestVersionReady(firstVersionId);
+            insertTestVersion(secondVersionId, documentId, 2, "out-of-order-v2");
+            insertTestTextUnit(secondUnitId, secondVersionId, 1, marker + " current version two");
+            markTestVersionReady(secondVersionId);
+
+            RetrievalIndexWorkContext first =
+                    insertProcessingRetrievalContext(documentId, firstVersionId);
+            RetrievalIndexWorkContext second =
+                    insertProcessingRetrievalContext(documentId, secondVersionId);
+
+            completeRetrievalIndex(
+                    second, secondUnitId, marker + " current version two", Instant.now());
+            assertRetrievalIndexStatus(second.retrievalIndexId(), "READY");
+            completeRetrievalIndex(
+                    first, firstUnitId, marker + " obsolete version one", Instant.now());
+
+            assertRetrievalIndexStatus(first.retrievalIndexId(), "SUPERSEDED");
+            assertRetrievalIndexStatus(second.retrievalIndexId(), "READY");
+            assertRetrievalJobStatus(first.jobId(), "COMPLETED");
+            assertRetrievalJobStatus(second.jobId(), "COMPLETED");
+            assertSearchUsesOnlyVersion(marker, secondVersionId, firstVersionId);
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void normalIndexCompletionOrderStillPromotesTheNewestVersion() throws Exception {
+        UUID documentId = UUID.randomUUID();
+        UUID firstVersionId = UUID.randomUUID();
+        UUID secondVersionId = UUID.randomUUID();
+        UUID firstUnitId = UUID.randomUUID();
+        UUID secondUnitId = UUID.randomUUID();
+        String marker = "normal-cutover";
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(firstVersionId, documentId, 1, "normal-v1");
+            insertTestTextUnit(firstUnitId, firstVersionId, 1, marker + " obsolete version one");
+            markTestVersionReady(firstVersionId);
+            insertTestVersion(secondVersionId, documentId, 2, "normal-v2");
+            insertTestTextUnit(secondUnitId, secondVersionId, 1, marker + " current version two");
+            markTestVersionReady(secondVersionId);
+
+            RetrievalIndexWorkContext first =
+                    insertProcessingRetrievalContext(documentId, firstVersionId);
+            RetrievalIndexWorkContext second =
+                    insertProcessingRetrievalContext(documentId, secondVersionId);
+
+            completeRetrievalIndex(
+                    first, firstUnitId, marker + " obsolete version one", Instant.now());
+            assertRetrievalIndexStatus(first.retrievalIndexId(), "READY");
+            completeRetrievalIndex(
+                    second, secondUnitId, marker + " current version two", Instant.now());
+
+            assertRetrievalIndexStatus(first.retrievalIndexId(), "SUPERSEDED");
+            assertRetrievalIndexStatus(second.retrievalIndexId(), "READY");
+            assertSearchUsesOnlyVersion(marker, secondVersionId, firstVersionId);
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void independentlyClaimedConcurrentCompletionsCannotRegressCurrentVersion() throws Exception {
+        UUID documentId = UUID.randomUUID();
+        UUID firstVersionId = UUID.randomUUID();
+        UUID secondVersionId = UUID.randomUUID();
+        UUID firstUnitId = UUID.randomUUID();
+        UUID secondUnitId = UUID.randomUUID();
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(firstVersionId, documentId, 1, "concurrent-v1");
+            insertTestTextUnit(firstUnitId, firstVersionId, 1, "concurrent marker version one");
+            markTestVersionReady(firstVersionId);
+            insertTestVersion(secondVersionId, documentId, 2, "concurrent-v2");
+            insertTestTextUnit(secondUnitId, secondVersionId, 1, "concurrent marker version two");
+            markTestVersionReady(secondVersionId);
+            RetrievalIndexWorkContext first =
+                    insertProcessingRetrievalContext(documentId, firstVersionId);
+            RetrievalIndexWorkContext second =
+                    insertProcessingRetrievalContext(documentId, secondVersionId);
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+
+            Future<?> firstCompletion =
+                    executor.submit(
+                            () -> {
+                                awaitStart(ready, start);
+                                completeRetrievalIndex(
+                                        first,
+                                        firstUnitId,
+                                        "concurrent marker version one",
+                                        Instant.now());
+                            });
+            Future<?> secondCompletion =
+                    executor.submit(
+                            () -> {
+                                awaitStart(ready, start);
+                                completeRetrievalIndex(
+                                        second,
+                                        secondUnitId,
+                                        "concurrent marker version two",
+                                        Instant.now());
+                            });
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            firstCompletion.get(10, TimeUnit.SECONDS);
+            secondCompletion.get(10, TimeUnit.SECONDS);
+
+            assertRetrievalIndexStatus(first.retrievalIndexId(), "SUPERSEDED");
+            assertRetrievalIndexStatus(second.retrievalIndexId(), "READY");
+            assertRetrievalJobStatus(first.jobId(), "COMPLETED");
+            assertRetrievalJobStatus(second.jobId(), "COMPLETED");
+            assertSearchUsesOnlyVersion("concurrent", secondVersionId, firstVersionId);
+        } finally {
+            executor.shutdownNow();
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void vectorCapabilitiesRequireActiveCurrentReadyCompatibleContent() throws Exception {
+        UUID organizationId = UUID.randomUUID();
+        UUID workspaceId = UUID.randomUUID();
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        String organizationSlug = "capability-org-" + organizationId;
+        String workspaceSlug = "capability-workspace-" + workspaceId;
+        String marker = "capability-boundary";
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO organizations (id, slug, display_name) VALUES (?, ?, ?)",
+                    organizationId,
+                    organizationSlug,
+                    "Capability Test Organization");
+            jdbcTemplate.update(
+                    "INSERT INTO workspaces (id, organization_id, slug, display_name)"
+                            + " VALUES (?, ?, ?, ?)",
+                    workspaceId,
+                    organizationId,
+                    workspaceSlug,
+                    "Capability Test Workspace");
+            insertTestDocument(
+                    documentId, organizationId, workspaceId, "Capability boundary document");
+            insertTestVersion(
+                    versionId, documentId, organizationId, workspaceId, 1, "capabilities");
+            insertTestTextUnit(
+                    UUID.randomUUID(),
+                    versionId,
+                    organizationId,
+                    workspaceId,
+                    1,
+                    marker + " current vector content");
+            markTestVersionReady(versionId);
+            indexReadyVersions(versionId);
+
+            var current = retrievalCapabilities(organizationSlug, workspaceSlug);
+            assertThat(current.vectorAvailable()).isTrue();
+            assertThat(current.autoMode()).isEqualTo(RetrievalMode.HYBRID);
+
+            jdbcTemplate.update(
+                    "UPDATE documents SET status = 'ARCHIVED', archived_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    documentId);
+            var archivedOnly = retrievalCapabilities(organizationSlug, workspaceSlug);
+            assertThat(archivedOnly.vectorAvailable()).isFalse();
+            assertThat(archivedOnly.autoMode()).isEqualTo(RetrievalMode.LEXICAL);
+            assertThat(autoSearch(organizationSlug, workspaceSlug, marker).effectiveMode())
+                    .isEqualTo(RetrievalMode.LEXICAL);
+
+            jdbcTemplate.update(
+                    "UPDATE documents SET status = 'ACTIVE', archived_at = NULL WHERE id = ?",
+                    documentId);
+            jdbcTemplate.update(
+                    "UPDATE retrieval_indexes SET status = 'SUPERSEDED', ready_at = NULL,"
+                            + " superseded_at = CURRENT_TIMESTAMP WHERE document_version_id = ?",
+                    versionId);
+            var supersededOnly = retrievalCapabilities(organizationSlug, workspaceSlug);
+            assertThat(supersededOnly.vectorAvailable()).isFalse();
+            assertThat(supersededOnly.autoMode()).isEqualTo(RetrievalMode.LEXICAL);
+            assertThat(autoSearch(organizationSlug, workspaceSlug, marker).effectiveMode())
+                    .isEqualTo(RetrievalMode.LEXICAL);
+
+            jdbcTemplate.update(
+                    "UPDATE retrieval_indexes SET status = 'READY', ready_at = CURRENT_TIMESTAMP,"
+                            + " superseded_at = NULL WHERE document_version_id = ?",
+                    versionId);
+            var restoredCurrent = retrievalCapabilities(organizationSlug, workspaceSlug);
+            assertThat(restoredCurrent.vectorAvailable()).isTrue();
+            assertThat(restoredCurrent.autoMode()).isEqualTo(RetrievalMode.HYBRID);
+        } finally {
+            deleteTestDocument(documentId);
+            jdbcTemplate.update("DELETE FROM workspaces WHERE id = ?", workspaceId);
+            jdbcTemplate.update("DELETE FROM organizations WHERE id = ?", organizationId);
+        }
+    }
+
+    @Test
     void retrievalModesReturnAuthorizedCitationsAndNeverLeakAnotherTenant() throws Exception {
         UUID acmeDocumentId = UUID.randomUUID();
         UUID acmeVersionId = UUID.randomUUID();
@@ -1968,6 +2187,111 @@ class EnterpriseAiApplicationIT {
                 ACME_ORGANIZATION_ID,
                 ACME_WORKSPACE_ID,
                 attemptCount);
+    }
+
+    private RetrievalIndexWorkContext insertProcessingRetrievalContext(
+            UUID documentId, UUID versionId) {
+        UUID indexId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        insertTestRetrievalIndex(indexId, documentId, versionId, 1);
+        jdbcTemplate.update(
+                "UPDATE retrieval_indexes SET status = 'PROCESSING',"
+                        + " embedding_provider = 'deterministic-smoke',"
+                        + " embedding_model = 'hashed-token-v1-test-only',"
+                        + " embedding_dimension = 64 WHERE id = ?",
+                indexId);
+        insertProcessingRetrievalJob(jobId, indexId, versionId, 1);
+        return new RetrievalIndexWorkContext(
+                jobId,
+                indexId,
+                documentId,
+                versionId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID,
+                1,
+                "deterministic-smoke",
+                "hashed-token-v1-test-only",
+                64);
+    }
+
+    private void completeRetrievalIndex(
+            RetrievalIndexWorkContext context,
+            UUID textUnitId,
+            String content,
+            Instant completedAt) {
+        float[] embedding = new float[64];
+        embedding[0] = 1.0f;
+        RetrievalChunkDraft chunk =
+                new RetrievalChunkDraft(
+                        UUID.randomUUID(),
+                        textUnitId,
+                        1,
+                        "DOCUMENT",
+                        "body",
+                        0,
+                        content.length(),
+                        content);
+        retrievalIndexLifecycleService.complete(
+                context, List.of(chunk), List.of(embedding), completedAt);
+    }
+
+    private void assertRetrievalIndexStatus(UUID indexId, String expectedStatus) {
+        assertThat(
+                        jdbcTemplate.queryForObject(
+                                "SELECT status FROM retrieval_indexes WHERE id = ?",
+                                String.class,
+                                indexId))
+                .isEqualTo(expectedStatus);
+    }
+
+    private void assertRetrievalJobStatus(UUID jobId, String expectedStatus) {
+        assertThat(
+                        jdbcTemplate.queryForObject(
+                                "SELECT status FROM retrieval_index_jobs WHERE id = ?",
+                                String.class,
+                                jobId))
+                .isEqualTo(expectedStatus);
+    }
+
+    private void assertSearchUsesOnlyVersion(
+            String query, UUID expectedVersionId, UUID excludedVersionId) {
+        RetrievalSearchResponse response =
+                retrievalSearchService.search(
+                        authentication(MEMBER_SUBJECT, "MEMBER"),
+                        "acme",
+                        "operations",
+                        new RetrievalSearchRequest(query, RetrievalMode.LEXICAL, 5));
+        assertThat(response.results())
+                .extracting(result -> result.citation().documentVersionId())
+                .contains(expectedVersionId)
+                .doesNotContain(excludedVersionId);
+    }
+
+    private io.github.yanziki.enterpriseai.retrieval.search.RetrievalCapabilitiesResponse
+            retrievalCapabilities(String organizationSlug, String workspaceSlug) {
+        return retrievalSearchService.capabilities(
+                authentication(ADMIN_SUBJECT, "PLATFORM_ADMIN"), organizationSlug, workspaceSlug);
+    }
+
+    private RetrievalSearchResponse autoSearch(
+            String organizationSlug, String workspaceSlug, String query) {
+        return retrievalSearchService.search(
+                authentication(ADMIN_SUBJECT, "PLATFORM_ADMIN"),
+                organizationSlug,
+                workspaceSlug,
+                new RetrievalSearchRequest(query, RetrievalMode.AUTO, 5));
+    }
+
+    private static void awaitStart(CountDownLatch ready, CountDownLatch start) {
+        ready.countDown();
+        try {
+            if (!start.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Concurrent retrieval completion did not start");
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Concurrent retrieval completion was interrupted", exception);
+        }
     }
 
     private void markTestVersionReady(UUID versionId) {

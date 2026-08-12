@@ -114,17 +114,9 @@ class RetrievalSearchRepository {
             UUID organizationId, UUID workspaceId, EmbeddingProvider provider) {
         Boolean present =
                 jdbcTemplate.queryForObject(
-                        """
-                        SELECT EXISTS (
-                            SELECT 1
-                            FROM retrieval_chunks AS chunk
-                            JOIN retrieval_indexes AS retrieval_index
-                              ON retrieval_index.id = chunk.retrieval_index_id
-                            WHERE chunk.organization_id = ?
-                              AND chunk.workspace_id = ?
-                              AND retrieval_index.status IN ('READY', 'SUPERSEDED')
-                              AND chunk.embedding IS NOT NULL
-                        """
+                        "SELECT EXISTS (SELECT 1 "
+                                + AUTHORIZED_CURRENT_INDEX
+                                + " AND chunk.embedding IS NOT NULL"
                                 + " AND chunk.embedding_provider = ?"
                                 + " AND chunk.embedding_model = ?"
                                 + " AND chunk.embedding_dimension = ?)",
