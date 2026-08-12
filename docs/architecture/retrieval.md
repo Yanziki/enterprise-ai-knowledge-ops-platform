@@ -89,6 +89,12 @@ VECTOR/HYBRID returns a controlled conflict. Local/test composed verification ma
 explicitly select `deterministic-smoke`, a 64-dimensional normalized hashed-token
 provider. It is test plumbing, not a meaningful production embedding model.
 
+No Spring AI or other dependency was added. A narrow application-owned interface
+keeps the retrieval domain independent of commercial adapters and avoids pulling
+chat/model APIs into the Day 4 dependency graph. Remote-provider timeouts and
+reindex orchestration remain requirements for the future adapter that introduces
+that boundary.
+
 If a future remote provider is enabled, extracted text and search queries cross
 the platform boundary. That must be opt-in, time-bounded, secret-safe, and approved
 through organizational privacy/data-governance review.
@@ -126,7 +132,7 @@ Old chunks remain immutable for audit/recovery and are not physically erased.
 ## Citation response
 
 Every result includes rank, immutable document/version/chunk IDs, version number,
-title, chunk ordinal, source text-unit ID, locator type/value, bounded plain-text
+title, locator type/value, source-relative offsets, bounded plain-text
 snippet, and component/fused scores. PDF locators are persisted page numbers;
 TXT/Markdown use `DOCUMENT/body`. No page is inferred and no content is generated.
 
@@ -150,3 +156,23 @@ Stable index failures include `CHUNKING_FAILURE`, `CHUNK_LIMIT_EXCEEDED`,
 `INDEX_PERSISTENCE_FAILURE`, and `INTERNAL_INDEXING_ERROR`. Clients receive no
 raw exception. Logs carry identifiers, lifecycle, counts, modes, and durations,
 never full queries, chunks, text, vectors, tokens, or secrets.
+
+Search completion logs include a random query ID, authorized tenant IDs, requested
+and used modes, query length, bounded candidate/result counts, top-K, and duration.
+Index logs include tenant/document/version/index/job IDs, generation, terminal
+status, chunk count, configured provider/model identifiers, safe failure code, and
+duration. Neither path logs actual query/chunk text or embeddings.
+
+## Known limitations
+
+- Only immutable generation 1 is reconciled automatically; there is no admin
+  reindex/model-migration endpoint yet.
+- Base/production configuration has no semantic embedding adapter. The local
+  deterministic provider validates plumbing only.
+- Cosine retrieval is an exact scan without HNSW/IVFFlat, appropriate to the
+  current bounded corpus but not yet benchmarked for large tenant datasets.
+- PostgreSQL `simple` full-text configuration provides limited stemming and CJK
+  segmentation.
+- Old immutable chunks are retained and excluded logically; physical retention
+  deletion remains future work.
+- No RAG answer, LLM, prompt, reranker, chat, agent, MCP, or workflow exists.

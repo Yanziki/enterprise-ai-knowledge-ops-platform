@@ -36,6 +36,7 @@ public class RetrievalIndexLifecycleService {
                                index.document_version_id,
                                index.organization_id,
                                index.workspace_id,
+                               index.generation,
                                index.embedding_provider,
                                index.embedding_model,
                                index.embedding_dimension
@@ -59,6 +60,7 @@ public class RetrievalIndexLifecycleService {
                                         resultSet.getObject("document_version_id", UUID.class),
                                         resultSet.getObject("organization_id", UUID.class),
                                         resultSet.getObject("workspace_id", UUID.class),
+                                        resultSet.getInt("generation"),
                                         resultSet.getString("embedding_provider"),
                                         resultSet.getString("embedding_model"),
                                         resultSet.getObject("embedding_dimension", Integer.class)),

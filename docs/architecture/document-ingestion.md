@@ -161,9 +161,11 @@ Archival locks the logical document and succeeds only when every version is
 document lock and requires the logical document to remain `ACTIVE`, preventing an
 archive/retry race from producing `FAILED -> ARCHIVED -> QUEUED`.
 
-## Relationship to future retrieval
+## Relationship to retrieval
 
-Day 4 may index authorized READY text units for retrieval. It must carry the same
-organization/workspace/document/version identity, honor archival and current
-membership, and cite the stored locator. Day 3 creates no vector, embedding,
-search, prompt, model, or answer-generation behavior.
+Day 4 indexes authorized READY text units while carrying the same organization,
+workspace, document, version, text-unit, and stored-locator identity into every
+chunk. Candidate SQL rechecks current membership and ACTIVE document state before
+ranking. Retrieval does not alter the Day 3 originals, text units, lifecycle, or
+provenance, and it introduces no prompt, generated answer, or model-completion
+behavior.

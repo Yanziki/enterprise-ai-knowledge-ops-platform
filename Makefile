@@ -3,7 +3,7 @@
 PNPM ?= pnpm
 COMPOSE ?= docker compose
 
-.PHONY: help dev up down logs test verify identity-verify knowledge-verify clean
+.PHONY: help dev up down logs test verify identity-verify knowledge-verify retrieval-verify clean
 
 help: ## Show available commands
 	@awk 'BEGIN {FS = ":.*## "; printf "Available commands:\n"} /^[a-zA-Z_-]+:.*## / {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -37,6 +37,9 @@ identity-verify: ## Verify the running local OIDC and tenant-isolation stack
 
 knowledge-verify: ## Verify document ingestion, provenance, and isolation
 	./scripts/verify-document-ingestion.sh
+
+retrieval-verify: ## Verify tenant-authorized lexical, vector, and hybrid retrieval
+	./scripts/verify-retrieval.sh
 
 clean: ## Remove generated build output and stop containers
 	cd apps/api && ./mvnw clean

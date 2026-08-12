@@ -154,6 +154,20 @@
         { "type": "password", "value": "OtherDevOnly123!", "temporary": false }
       ],
       "realmRoles": ["MEMBER"]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000004",
+      "username": "auditor@example.com",
+      "email": "auditor@example.com",
+      "firstName": "Acme",
+      "lastName": "Auditor",
+      "enabled": true,
+      "emailVerified": true,
+      "attributes": { "tenant": ["acme"] },
+      "credentials": [
+        { "type": "password", "value": "AuditorDevOnly123!", "temporary": false }
+      ],
+      "realmRoles": ["AUDITOR"]
     }
   ]
 }

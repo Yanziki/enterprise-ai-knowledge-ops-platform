@@ -9,6 +9,7 @@ public record RetrievalIndexWorkContext(
         UUID documentVersionId,
         UUID organizationId,
         UUID workspaceId,
+        int generation,
         String embeddingProvider,
         String embeddingModel,
         Integer embeddingDimension) {

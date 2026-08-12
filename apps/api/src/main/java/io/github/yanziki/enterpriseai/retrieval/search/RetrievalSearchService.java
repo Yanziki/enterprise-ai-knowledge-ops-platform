@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Service;
@@ -24,6 +26,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class RetrievalSearchService {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(RetrievalSearchService.class);
     private static final int RRF_K = 60;
     private static final int MAX_SNIPPET_CHARACTERS = 600;
     private final WorkspaceAuthorizationService authorizationService;
@@ -53,6 +56,8 @@ public class RetrievalSearchService {
                         organizationSlug,
                         workspaceSlug,
                         WorkspaceOperation.SEARCH_CONTENT);
+        UUID queryId = UUID.randomUUID();
+        long startedAt = System.nanoTime();
         String query = validQuery(request == null ? null : request.query());
         RetrievalMode requestedMode =
                 request == null || request.mode() == null ? RetrievalMode.AUTO : request.mode();
@@ -83,6 +88,19 @@ public class RetrievalSearchService {
                             properties.candidateLimit());
         }
         List<RetrievalSearchResult> results = rank(lexical, vector, effectiveMode, topK);
+        LOGGER.info(
+                "retrieval_search_completed queryId={} organizationId={} workspaceId={} requestedMode={} usedMode={} topK={} queryLength={} lexicalCandidates={} vectorCandidates={} results={} durationMs={}",
+                queryId,
+                scope.organizationId(),
+                scope.workspaceId(),
+                requestedMode,
+                effectiveMode,
+                topK,
+                query.length(),
+                lexical.size(),
+                vector.size(),
+                results.size(),
+                (System.nanoTime() - startedAt) / 1_000_000);
         return new RetrievalSearchResponse(
                 query, requestedMode, effectiveMode, topK, List.copyOf(results));
     }

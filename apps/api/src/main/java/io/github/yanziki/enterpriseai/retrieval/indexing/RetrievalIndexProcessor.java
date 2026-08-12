@@ -37,6 +37,7 @@ public class RetrievalIndexProcessor {
 
     public void process(UUID jobId) {
         RetrievalIndexWorkContext context = lifecycleService.begin(jobId);
+        long startedAt = System.nanoTime();
         try {
             List<RetrievalChunkDraft> chunks =
                     chunker.chunk(
@@ -45,12 +46,18 @@ public class RetrievalIndexProcessor {
             List<float[]> embeddings = embed(context, chunks);
             lifecycleService.complete(context, chunks, embeddings, Instant.now());
             LOGGER.info(
-                    "retrieval_index_ready organizationId={} workspaceId={} versionId={} indexId={} chunks={}",
+                    "retrieval_index_ready organizationId={} workspaceId={} documentId={} versionId={} indexId={} generation={} jobId={} status=READY chunks={} embeddingProvider={} embeddingModel={} durationMs={}",
                     context.organizationId(),
                     context.workspaceId(),
+                    context.documentId(),
                     context.documentVersionId(),
                     context.retrievalIndexId(),
-                    chunks.size());
+                    context.generation(),
+                    context.jobId(),
+                    chunks.size(),
+                    context.embeddingProvider(),
+                    context.embeddingModel(),
+                    elapsedMillis(startedAt));
         } catch (RetrievalIndexingException exception) {
             lifecycleService.fail(
                     context,
@@ -59,12 +66,16 @@ public class RetrievalIndexProcessor {
                     exception.retryable(),
                     Instant.now());
             LOGGER.warn(
-                    "retrieval_index_failed organizationId={} workspaceId={} versionId={} indexId={} code={}",
+                    "retrieval_index_failed organizationId={} workspaceId={} documentId={} versionId={} indexId={} generation={} jobId={} status=FAILED code={} durationMs={}",
                     context.organizationId(),
                     context.workspaceId(),
+                    context.documentId(),
                     context.documentVersionId(),
                     context.retrievalIndexId(),
-                    exception.failureCode());
+                    context.generation(),
+                    context.jobId(),
+                    exception.failureCode(),
+                    elapsedMillis(startedAt));
         } catch (RuntimeException exception) {
             lifecycleService.fail(
                     context,
@@ -73,14 +84,22 @@ public class RetrievalIndexProcessor {
                     true,
                     Instant.now());
             LOGGER.warn(
-                    "retrieval_index_failed organizationId={} workspaceId={} versionId={} indexId={} code={}",
+                    "retrieval_index_failed organizationId={} workspaceId={} documentId={} versionId={} indexId={} generation={} jobId={} status=FAILED code={} durationMs={}",
                     context.organizationId(),
                     context.workspaceId(),
+                    context.documentId(),
                     context.documentVersionId(),
                     context.retrievalIndexId(),
+                    context.generation(),
+                    context.jobId(),
                     RetrievalFailureCode.INTERNAL_INDEXING_ERROR,
+                    elapsedMillis(startedAt),
                     exception);
         }
+    }
+
+    private long elapsedMillis(long startedAt) {
+        return (System.nanoTime() - startedAt) / 1_000_000;
     }
 
     private List<float[]> embed(

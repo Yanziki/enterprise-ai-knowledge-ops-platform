@@ -18,9 +18,13 @@ import io.github.yanziki.enterpriseai.knowledge.storage.ObjectStorage;
 import io.github.yanziki.enterpriseai.knowledge.storage.ObjectStorageException;
 import io.github.yanziki.enterpriseai.knowledge.storage.StagedUpload;
 import io.github.yanziki.enterpriseai.knowledge.storage.StorageProperties;
+import io.github.yanziki.enterpriseai.retrieval.RetrievalMode;
 import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexJobClaimer;
 import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexProcessor;
 import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexReconciler;
+import io.github.yanziki.enterpriseai.retrieval.search.RetrievalSearchRequest;
+import io.github.yanziki.enterpriseai.retrieval.search.RetrievalSearchResponse;
+import io.github.yanziki.enterpriseai.retrieval.search.RetrievalSearchService;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceAccessRole;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceAuthorizationService;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceOperation;
@@ -45,8 +49,10 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -185,6 +191,10 @@ class EnterpriseAiApplicationIT {
     @Autowired private RetrievalIndexJobClaimer retrievalIndexJobClaimer;
 
     @Autowired private RetrievalIndexProcessor retrievalIndexProcessor;
+
+    @Autowired private RetrievalSearchService retrievalSearchService;
+
+    @Autowired private tools.jackson.databind.ObjectMapper objectMapper;
 
     @BeforeEach
     void ensurePrivateDocumentBucket() {
@@ -643,8 +653,8 @@ class EnterpriseAiApplicationIT {
         assertThat(response.body())
                 .contains("\"organizationCount\":2")
                 .contains("\"workspaceCount\":2")
-                .contains("\"userProfileCount\":3")
-                .contains("\"membershipCount\":3");
+                .contains("\"userProfileCount\":4")
+                .contains("\"membershipCount\":4");
     }
 
     @Test
@@ -733,9 +743,9 @@ class EnterpriseAiApplicationIT {
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM workspaces", Integer.class))
                 .isEqualTo(2);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM user_profiles", Integer.class))
-                .isEqualTo(3);
+                .isEqualTo(4);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM memberships", Integer.class))
-                .isEqualTo(3);
+                .isEqualTo(4);
         assertThat(
                         jdbcTemplate.queryForObject(
                                 "SELECT COUNT(*) FROM flyway_schema_history"
@@ -840,9 +850,9 @@ class EnterpriseAiApplicationIT {
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM workspaces", Integer.class))
                 .isEqualTo(2);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM user_profiles", Integer.class))
-                .isEqualTo(3);
+                .isEqualTo(4);
         assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM memberships", Integer.class))
-                .isEqualTo(3);
+                .isEqualTo(4);
     }
 
     @Test
@@ -1465,6 +1475,145 @@ class EnterpriseAiApplicationIT {
         }
     }
 
+    @Test
+    void goldenRetrievalEvaluationMeetsCommittedThresholdsAndWritesArtifact() throws Exception {
+        Path dataset =
+                Path.of("..", "..", "tests", "fixtures", "retrieval", "golden-retrieval.jsonl")
+                        .toAbsolutePath()
+                        .normalize();
+        List<GoldenRetrievalCase> cases =
+                Files.readAllLines(dataset, StandardCharsets.UTF_8).stream()
+                        .filter(line -> !line.isBlank())
+                        .map(line -> objectMapper.readValue(line, GoldenRetrievalCase.class))
+                        .toList();
+        assertThat(cases).hasSize(8);
+        assertThat(cases).extracting(GoldenRetrievalCase::datasetVersion).containsOnly("day4-v1");
+
+        Map<String, UUID> documents = new LinkedHashMap<>();
+        List<Map<String, Object>> caseResults = new ArrayList<>();
+        Map<String, Map<String, Double>> metricsByMode = new LinkedHashMap<>();
+        Map<String, Double> thresholds =
+                Map.of("recallAt1", 0.75, "recallAt3", 1.0, "recallAt5", 1.0, "mrr", 0.85);
+        try {
+            int sequence = 1;
+            for (GoldenRetrievalCase goldenCase : cases) {
+                UUID documentId = UUID.randomUUID();
+                UUID versionId = UUID.randomUUID();
+                documents.put(goldenCase.documentKey(), documentId);
+                insertTestDocument(
+                        documentId, ACME_ORGANIZATION_ID, ACME_WORKSPACE_ID, goldenCase.title());
+                insertTestVersion(
+                        versionId,
+                        documentId,
+                        ACME_ORGANIZATION_ID,
+                        ACME_WORKSPACE_ID,
+                        1,
+                        "golden-" + sequence++);
+                insertTestTextUnit(UUID.randomUUID(), versionId, 1, goldenCase.text());
+                markTestVersionReady(versionId);
+            }
+            indexReadyVersions(
+                    documents.values().stream()
+                            .map(
+                                    documentId ->
+                                            jdbcTemplate.queryForObject(
+                                                    "SELECT id FROM document_versions"
+                                                            + " WHERE document_id = ?",
+                                                    UUID.class,
+                                                    documentId))
+                            .toArray(UUID[]::new));
+
+            for (RetrievalMode mode :
+                    List.of(RetrievalMode.LEXICAL, RetrievalMode.VECTOR, RetrievalMode.HYBRID)) {
+                double reciprocalRankTotal = 0.0;
+                int recallAt1 = 0;
+                int recallAt3 = 0;
+                int recallAt5 = 0;
+                for (GoldenRetrievalCase goldenCase : cases) {
+                    UUID expectedDocumentId = documents.get(goldenCase.documentKey());
+                    RetrievalSearchResponse response =
+                            retrievalSearchService.search(
+                                    authentication(MEMBER_SUBJECT, "MEMBER"),
+                                    "acme",
+                                    "operations",
+                                    new RetrievalSearchRequest(goldenCase.query(), mode, 5));
+                    int rank = 0;
+                    for (int index = 0; index < response.results().size(); index++) {
+                        if (response.results()
+                                .get(index)
+                                .citation()
+                                .documentId()
+                                .equals(expectedDocumentId)) {
+                            rank = index + 1;
+                            break;
+                        }
+                    }
+                    recallAt1 += rank > 0 && rank <= 1 ? 1 : 0;
+                    recallAt3 += rank > 0 && rank <= 3 ? 1 : 0;
+                    recallAt5 += rank > 0 && rank <= 5 ? 1 : 0;
+                    reciprocalRankTotal += rank == 0 ? 0.0 : 1.0 / rank;
+                    caseResults.add(
+                            Map.of(
+                                    "mode", mode,
+                                    "query", goldenCase.query(),
+                                    "expectedDocumentKey", goldenCase.documentKey(),
+                                    "rank", rank,
+                                    "returnedDocumentIds",
+                                            response.results().stream()
+                                                    .map(result -> result.citation().documentId())
+                                                    .toList()));
+                }
+                double caseCount = cases.size();
+                metricsByMode.put(
+                        mode.name(),
+                        Map.of(
+                                "recallAt1", recallAt1 / caseCount,
+                                "recallAt3", recallAt3 / caseCount,
+                                "recallAt5", recallAt5 / caseCount,
+                                "mrr", reciprocalRankTotal / caseCount));
+            }
+
+            boolean passed =
+                    metricsByMode.values().stream()
+                            .flatMap(metrics -> metrics.entrySet().stream())
+                            .allMatch(entry -> entry.getValue() >= thresholds.get(entry.getKey()));
+            Map<String, Object> artifact = new LinkedHashMap<>();
+            artifact.put("datasetVersion", "day4-v1");
+            artifact.put("generatedAt", Instant.now().toString());
+            artifact.put("queryCount", cases.size());
+            artifact.put("modes", metricsByMode.keySet());
+            artifact.put("metricsByMode", metricsByMode);
+            artifact.put("thresholds", thresholds);
+            artifact.put("passed", passed);
+            artifact.put("cases", caseResults);
+            Path artifactPath = Path.of("target", "retrieval-evaluation.json");
+            Files.createDirectories(artifactPath.getParent());
+            objectMapper
+                    .writerWithDefaultPrettyPrinter()
+                    .writeValue(artifactPath.toFile(), artifact);
+
+            assertThat(metricsByMode)
+                    .allSatisfy(
+                            (mode, metrics) -> {
+                                assertThat(metrics.get("recallAt1"))
+                                        .as(mode + " Recall@1")
+                                        .isGreaterThanOrEqualTo(0.75);
+                                assertThat(metrics.get("recallAt3"))
+                                        .as(mode + " Recall@3")
+                                        .isGreaterThanOrEqualTo(1.0);
+                                assertThat(metrics.get("recallAt5"))
+                                        .as(mode + " Recall@5")
+                                        .isGreaterThanOrEqualTo(1.0);
+                                assertThat(metrics.get("mrr"))
+                                        .as(mode + " MRR")
+                                        .isGreaterThanOrEqualTo(0.85);
+                            });
+            assertThat(passed).isTrue();
+        } finally {
+            documents.values().forEach(this::deleteTestDocument);
+        }
+    }
+
     private HttpResponse<String> multipart(
             String path,
             String accessToken,
@@ -1919,6 +2068,9 @@ class EnterpriseAiApplicationIT {
             return resultSet.getInt(1);
         }
     }
+
+    private record GoldenRetrievalCase(
+            String datasetVersion, String documentKey, String title, String text, String query) {}
 
     private static RSAKey createRsaKey() {
         try {
