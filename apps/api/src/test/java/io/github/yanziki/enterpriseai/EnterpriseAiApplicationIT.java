@@ -738,7 +738,7 @@ class EnterpriseAiApplicationIT {
                                 "SELECT MAX(version::integer) FROM flyway_schema_history"
                                         + " WHERE success AND version ~ '^[0-9]+$'",
                                 Integer.class))
-                .isEqualTo(3);
+                .isEqualTo(4);
         assertThat(
                         jdbcTemplate.queryForObject(
                                 "SELECT COUNT(*) FROM flyway_schema_history"
@@ -799,8 +799,8 @@ class EnterpriseAiApplicationIT {
                                 queryForInt(
                                         connection,
                                         "SELECT COUNT(*) FROM flyway_schema_history"
-                                                + " WHERE version IN ('1', '2', '3') AND success"))
-                        .isEqualTo(3);
+                                                + " WHERE version IN ('1', '2', '3', '4') AND success"))
+                        .isEqualTo(4);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -812,7 +812,7 @@ class EnterpriseAiApplicationIT {
                                         connection,
                                         "SELECT MAX(version::integer) FROM flyway_schema_history"
                                                 + " WHERE success AND version ~ '^[0-9]+$'"))
-                        .isEqualTo(3);
+                        .isEqualTo(4);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -865,7 +865,7 @@ class EnterpriseAiApplicationIT {
                                         connection,
                                         "SELECT MAX(version::integer) FROM flyway_schema_history"
                                                 + " WHERE success AND version ~ '^[0-9]+$'"))
-                        .isEqualTo(3);
+                        .isEqualTo(4);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -877,7 +877,7 @@ class EnterpriseAiApplicationIT {
             }
 
             Files.writeString(
-                    futureMigrationLocation.resolve("V4__future_migration_probe.sql"),
+                    futureMigrationLocation.resolve("V5__future_migration_probe.sql"),
                     "CREATE TABLE future_migration_probe (id INTEGER PRIMARY KEY);\n",
                     StandardCharsets.UTF_8);
 
@@ -902,7 +902,7 @@ class EnterpriseAiApplicationIT {
                                 queryForInt(
                                         connection,
                                         "SELECT COUNT(*) FROM flyway_schema_history"
-                                                + " WHERE version = '4' AND success"))
+                                                + " WHERE version = '5' AND success"))
                         .isEqualTo(1);
                 assertThat(
                                 queryForInt(
@@ -1094,6 +1094,45 @@ class EnterpriseAiApplicationIT {
                                             UUID.randomUUID(), versionId, 1, "Duplicate ordinal"))
                     .isInstanceOf(DataIntegrityViolationException.class)
                     .hasMessageContaining("document_text_units_order_unique");
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void retrievalIndexGenerationAndTenantScopeAreDatabaseEnforced() {
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(versionId, documentId, 1, "retrieval");
+
+            UUID indexId = UUID.randomUUID();
+            insertTestRetrievalIndex(indexId, documentId, versionId, 1);
+
+            assertThatThrownBy(
+                            () ->
+                                    insertTestRetrievalIndex(
+                                            UUID.randomUUID(), documentId, versionId, 1))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("retrieval_indexes_generation_unique");
+
+            assertThatThrownBy(
+                            () ->
+                                    jdbcTemplate.update(
+                                            "INSERT INTO retrieval_indexes"
+                                                    + " (id, document_id, document_version_id,"
+                                                    + " organization_id, workspace_id, generation, status,"
+                                                    + " chunker_name, chunker_version, chunk_size, chunk_overlap)"
+                                                    + " VALUES (?, ?, ?, ?, ?, 2, 'QUEUED',"
+                                                    + " 'paragraph-whitespace', '1', 1200, 150)",
+                                            UUID.randomUUID(),
+                                            documentId,
+                                            versionId,
+                                            GLOBEX_ORGANIZATION_ID,
+                                            GLOBEX_WORKSPACE_ID))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("retrieval_indexes_version_tenant_fk");
         } finally {
             deleteTestDocument(documentId);
         }
@@ -1375,6 +1414,23 @@ class EnterpriseAiApplicationIT {
                 ACME_WORKSPACE_ID);
     }
 
+    private void insertTestRetrievalIndex(
+            UUID indexId, UUID documentId, UUID versionId, int generation) {
+        jdbcTemplate.update(
+                "INSERT INTO retrieval_indexes"
+                        + " (id, document_id, document_version_id, organization_id, workspace_id,"
+                        + " generation, status, chunker_name, chunker_version, chunk_size,"
+                        + " chunk_overlap)"
+                        + " VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', 'paragraph-whitespace', '1',"
+                        + " 1200, 150)",
+                indexId,
+                documentId,
+                versionId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID,
+                generation);
+    }
+
     private void assertDocumentStatus(UUID documentId, String expectedStatus) {
         assertThat(
                         jdbcTemplate.queryForObject(
@@ -1385,6 +1441,12 @@ class EnterpriseAiApplicationIT {
     }
 
     private void deleteTestDocument(UUID documentId) {
+        jdbcTemplate.update("DELETE FROM retrieval_chunks WHERE document_id = ?", documentId);
+        jdbcTemplate.update(
+                "DELETE FROM retrieval_index_jobs WHERE retrieval_index_id IN"
+                        + " (SELECT id FROM retrieval_indexes WHERE document_id = ?)",
+                documentId);
+        jdbcTemplate.update("DELETE FROM retrieval_indexes WHERE document_id = ?", documentId);
         jdbcTemplate.update(
                 "DELETE FROM document_text_units WHERE document_version_id IN"
                         + " (SELECT id FROM document_versions WHERE document_id = ?)",

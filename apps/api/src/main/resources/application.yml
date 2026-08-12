@@ -45,6 +45,19 @@ app:
     claim-batch-size: ${INGESTION_CLAIM_BATCH_SIZE:4}
     retry-delay-seconds: ${INGESTION_RETRY_DELAY_SECONDS:2}
     stale-claim-seconds: ${INGESTION_STALE_CLAIM_SECONDS:300}
+  retrieval:
+    chunk-size: ${RETRIEVAL_CHUNK_SIZE:1200}
+    chunk-overlap: ${RETRIEVAL_CHUNK_OVERLAP:150}
+    max-chunks-per-version: ${RETRIEVAL_MAX_CHUNKS_PER_VERSION:2000}
+    poll-interval-ms: ${RETRIEVAL_POLL_INTERVAL_MS:750}
+    claim-batch-size: ${RETRIEVAL_CLAIM_BATCH_SIZE:4}
+    retry-delay-seconds: ${RETRIEVAL_RETRY_DELAY_SECONDS:2}
+    stale-claim-seconds: ${RETRIEVAL_STALE_CLAIM_SECONDS:300}
+    max-query-characters: ${RETRIEVAL_MAX_QUERY_CHARACTERS:2000}
+    max-top-k: ${RETRIEVAL_MAX_TOP_K:20}
+    candidate-limit: ${RETRIEVAL_CANDIDATE_LIMIT:50}
+    embedding-batch-size: ${RETRIEVAL_EMBEDDING_BATCH_SIZE:32}
+    embedding-mode: ${RETRIEVAL_EMBEDDING_MODE:none}
 
 application:
   version: "@project.version@"
