@@ -18,6 +18,9 @@ import io.github.yanziki.enterpriseai.knowledge.storage.ObjectStorage;
 import io.github.yanziki.enterpriseai.knowledge.storage.ObjectStorageException;
 import io.github.yanziki.enterpriseai.knowledge.storage.StagedUpload;
 import io.github.yanziki.enterpriseai.knowledge.storage.StorageProperties;
+import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexJobClaimer;
+import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexProcessor;
+import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexReconciler;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceAccessRole;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceAuthorizationService;
 import io.github.yanziki.enterpriseai.tenant.WorkspaceOperation;
@@ -176,6 +179,12 @@ class EnterpriseAiApplicationIT {
     @Autowired private DocumentObjectKeyFactory documentObjectKeyFactory;
 
     @Autowired private BoundedUploadStager boundedUploadStager;
+
+    @Autowired private RetrievalIndexReconciler retrievalIndexReconciler;
+
+    @Autowired private RetrievalIndexJobClaimer retrievalIndexJobClaimer;
+
+    @Autowired private RetrievalIndexProcessor retrievalIndexProcessor;
 
     @BeforeEach
     void ensurePrivateDocumentBucket() {
@@ -1138,6 +1147,123 @@ class EnterpriseAiApplicationIT {
         }
     }
 
+    @Test
+    void readyVersionIsAutomaticallyIndexedWithStableProvenanceAndEmbeddings()
+            throws InterruptedException {
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID textUnitId = UUID.randomUUID();
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(versionId, documentId, 1, "ready-reconciliation");
+            insertTestTextUnit(
+                    textUnitId,
+                    versionId,
+                    1,
+                    "Travel expenses require manager approval before reimbursement.");
+            markTestVersionReady(versionId);
+
+            for (int pass = 0; pass < 10; pass++) {
+                retrievalIndexReconciler.enqueueMissingReadyVersions();
+                List<UUID> claimed =
+                        retrievalIndexJobClaimer.claimNextBatch(4, Instant.now().plusSeconds(1));
+                claimed.forEach(retrievalIndexProcessor::process);
+                if (jdbcTemplate.queryForObject(
+                                "SELECT COUNT(*) FROM retrieval_indexes"
+                                        + " WHERE document_version_id = ? AND status = 'READY'",
+                                Integer.class,
+                                versionId)
+                        == 1) {
+                    break;
+                }
+            }
+            awaitRetrievalIndex(versionId, "READY");
+            retrievalIndexReconciler.enqueueMissingReadyVersions();
+
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT COUNT(*) FROM retrieval_indexes"
+                                            + " WHERE document_version_id = ?",
+                                    Integer.class,
+                                    versionId))
+                    .isEqualTo(1);
+            assertThat(
+                            jdbcTemplate.queryForMap(
+                                    "SELECT source_text_unit_id, locator_type, locator_value,"
+                                            + " start_character, end_character, character_count,"
+                                            + " embedding_provider, embedding_model,"
+                                            + " vector_dims(embedding) AS dimension"
+                                            + " FROM retrieval_chunks WHERE document_version_id = ?",
+                                    versionId))
+                    .containsEntry("source_text_unit_id", textUnitId)
+                    .containsEntry("locator_type", "DOCUMENT")
+                    .containsEntry("locator_value", "body")
+                    .containsEntry("start_character", 0)
+                    .containsEntry("end_character", 62)
+                    .containsEntry("character_count", 62)
+                    .containsEntry("embedding_provider", "deterministic-smoke")
+                    .containsEntry("embedding_model", "hashed-token-v1-test-only")
+                    .containsEntry("dimension", 64);
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void staleRetrievalClaimIsRequeuedThenFailsAtBoundedAttemptLimit() {
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID indexId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(versionId, documentId, 1, "stale-index");
+            markTestVersionReady(versionId);
+            insertTestRetrievalIndex(indexId, documentId, versionId, 1);
+            jdbcTemplate.update(
+                    "UPDATE retrieval_indexes SET status = 'PROCESSING' WHERE id = ?", indexId);
+            insertProcessingRetrievalJob(jobId, indexId, versionId, 1);
+
+            retrievalIndexJobClaimer.recoverStaleClaims(Instant.now(), Instant.now());
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT status FROM retrieval_index_jobs WHERE id = ?",
+                                    String.class,
+                                    jobId))
+                    .isEqualTo("QUEUED");
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT status FROM retrieval_indexes WHERE id = ?",
+                                    String.class,
+                                    indexId))
+                    .isEqualTo("QUEUED");
+
+            jdbcTemplate.update(
+                    "UPDATE retrieval_indexes SET status = 'PROCESSING' WHERE id = ?", indexId);
+            jdbcTemplate.update(
+                    "UPDATE retrieval_index_jobs SET status = 'PROCESSING', attempt_count = 3,"
+                            + " claimed_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    jobId);
+            retrievalIndexJobClaimer.recoverStaleClaims(
+                    Instant.now().plusSeconds(1), Instant.now());
+
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT status FROM retrieval_index_jobs WHERE id = ?",
+                                    String.class,
+                                    jobId))
+                    .isEqualTo("FAILED");
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT status FROM retrieval_indexes WHERE id = ?",
+                                    String.class,
+                                    indexId))
+                    .isEqualTo("FAILED");
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
     private HttpResponse<String> multipart(
             String path,
             String accessToken,
@@ -1429,6 +1555,46 @@ class EnterpriseAiApplicationIT {
                 ACME_ORGANIZATION_ID,
                 ACME_WORKSPACE_ID,
                 generation);
+    }
+
+    private void insertProcessingRetrievalJob(
+            UUID jobId, UUID indexId, UUID versionId, int attemptCount) {
+        jdbcTemplate.update(
+                "INSERT INTO retrieval_index_jobs"
+                        + " (id, retrieval_index_id, document_version_id, organization_id,"
+                        + " workspace_id, status, attempt_count, claimed_at)"
+                        + " VALUES (?, ?, ?, ?, ?, 'PROCESSING', ?, CURRENT_TIMESTAMP)",
+                jobId,
+                indexId,
+                versionId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID,
+                attemptCount);
+    }
+
+    private void markTestVersionReady(UUID versionId) {
+        jdbcTemplate.update(
+                "UPDATE document_versions SET ingestion_status = 'READY',"
+                        + " parser_name = 'integration-test', parser_version = '1',"
+                        + " ready_at = CURRENT_TIMESTAMP WHERE id = ?",
+                versionId);
+    }
+
+    private void awaitRetrievalIndex(UUID versionId, String expectedStatus)
+            throws InterruptedException {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            List<String> statuses =
+                    jdbcTemplate.queryForList(
+                            "SELECT status FROM retrieval_indexes WHERE document_version_id = ?",
+                            String.class,
+                            versionId);
+            if (statuses.contains(expectedStatus)) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError(
+                "Retrieval index did not reach " + expectedStatus + " for version " + versionId);
     }
 
     private void assertDocumentStatus(UUID documentId, String expectedStatus) {
