@@ -5,12 +5,11 @@ traceable, human-supervised operations. The platform is being built as a secure
 modular monolith with a Spring Boot API, React web client, PostgreSQL with
 pgvector, and standards-based identity.
 
-> **Current milestone: Tenant-authorized hybrid retrieval and evaluation.** Day 4
-> turns READY normalized text into deterministic provenance chunks, durable
-> retrieval indexes, PostgreSQL lexical/vector candidates, RRF-fused cited search,
-> and a threshold-gated golden benchmark. Generated answers, RAG response
-> generation, chat, prompts, agents, MCP, tools, and workflows remain deliberately
-> absent.
+> **Current milestone: Grounded single-turn answers.** Day 5 reuses authorized
+> Day 4 retrieval to assemble bounded untrusted evidence, generate structured
+> answers through an application-owned provider boundary, validate request-local
+> citation aliases on the server, and abstain when evidence is insufficient.
+> Chat, memory, agents, MCP, tools, and workflows remain deliberately absent.
 
 ## Problem statement
 
@@ -47,8 +46,9 @@ frontend offers only authorized organizations.
 See the [system context](docs/architecture/context.md),
 [document-ingestion architecture](docs/architecture/document-ingestion.md),
 [retrieval architecture](docs/architecture/retrieval.md),
+[grounded-answer architecture](docs/architecture/grounded-answers.md),
 [technology stack](docs/architecture/technology-stack.md), and
-[retrieval threat model](docs/security/retrieval-threat-model.md).
+[grounded RAG threat model](docs/security/rag-threat-model.md).
 
 ## Repository structure
 
@@ -200,6 +200,32 @@ organizational privacy/data-governance approval.
 
 ![Tenant-authorized cited hybrid search](docs/assets/day-4-cited-hybrid-search.png)
 
+## Grounded answers
+
+`POST /api/v1/organizations/{organization}/workspaces/{workspace}/answers` checks
+`ANSWER_FROM_KNOWLEDGE` before retrieval or generation. It accepts only a bounded
+question, retrieval mode, and topK. Clients cannot supply prompts, provider URLs,
+models, credentials, raw context, tenant IDs, or provenance.
+
+Only authorized Day 4 results enter a deterministic JSON evidence envelope. The
+server assigns `C1..Cn`; models return structured `ANSWERED` or
+`INSUFFICIENT_EVIDENCE` output, and the backend rejects fabricated, duplicate, or
+malformed aliases before reconstructing immutable citations. Retrieved documents
+are untrusted data, including any embedded instructions. This does not make model
+answers infallible or eliminate prompt-injection/hallucination risk.
+
+Production defaults to `ANSWER_PROVIDER=none`. Local/CI explicitly use the
+test-only `deterministic-smoke` provider. `openai-compatible` is optional and must
+be explicitly configured with an approved HTTPS base URL, model, environment API
+key, timeout, and output limit. Remote use transmits bounded enterprise question
+and evidence text outside the platform and requires privacy/data-governance review.
+
+The **Ask Knowledge** UI is single-turn and renders plain text plus canonical
+document/version/locator citations; it has no conversation history or generated
+HTML.
+
+![Grounded answer with server-validated citation provenance](docs/assets/day-5-grounded-answer.png)
+
 ## Authorization behavior
 
 - `/api/v1/system/status` and Actuator health probes remain public.
@@ -247,6 +273,16 @@ Auditor and cross-tenant `403`, proves last-known-good new-version cutover, arch
 the document, and confirms its chunks disappear from normal search. No token,
 credential, object key, vector, or external provider is exposed.
 
+Run the composed grounded-answer boundary demonstration:
+
+```bash
+make answer-verify
+```
+
+It proves answer `401`/role/cross-tenant denial, canonical server citations,
+controlled abstention, prompt-injection alias rejection, and archive exclusion
+using only the deterministic local provider.
+
 ## Verification
 
 Run the repository test suites and static checks:
@@ -276,8 +312,8 @@ make retrieval-verify
 Backend integration tests require a working Docker daemon because they use a
 real pgvector-enabled PostgreSQL container, never H2. CI repeats both suites,
 builds the Compose stack, checks pgvector, and runs identity, ingestion, and
-retrieval verifiers. The backend suite writes and CI publishes
-`retrieval-evaluation.json`. The identity verifier also proves the repeatable local
+retrieval/answer verifiers. The backend suite writes and CI publishes
+`retrieval-evaluation.json` and `answer-evaluation.json`. The identity verifier also proves the repeatable local
 fixture was explicitly applied without recording version 900, confirms V4 is the latest versioned
 migration, accepts same-organization and nullable-workspace memberships in
 rollback-only transactions, and confirms the database rejects Acme membership
@@ -289,13 +325,13 @@ troubleshooting, follow the
 
 ## Explicitly unfinished
 
-Day 4 does not implement malware scanning, OCR, password-protected PDF support,
+Day 5 does not implement malware scanning, OCR, password-protected PDF support,
 Office/image/HTML/URL/ZIP ingestion, physical retention deletion, per-object
 encryption keys, separate production-grade object-storage identities, public
 registration, password reset, social login, production identity deployment,
-production secrets, billing, a production embedding adapter, ANN indexes, model
-reindex orchestration, RAG answer generation, LLM calls, chat, prompts, reranking,
-agents, MCP, tool calling, audit business workflows, Redis, Kafka, Elasticsearch,
+production secrets, billing, a production embedding adapter, production LLM
+approval/operations, ANN indexes, model reindex orchestration, chat, memory,
+reranking, agents, MCP, tool calling, audit business workflows, Redis, Kafka, Elasticsearch,
 OpenSearch, Kubernetes, or cloud deployment. Extraction is bounded parsing, not a
 claim that uploaded content is safe. The `simple` PostgreSQL tokenizer has limited
 stemming and CJK segmentation, and exact vector scans target the current bounded
@@ -305,7 +341,7 @@ Object storage and PostgreSQL are not written atomically. The API attempts a
 narrow compensating object delete when database persistence fails, but a process
 or container crash after the S3 write and before the metadata commit can leave an
 orphaned object. Production hardening must add reconciliation and bounded orphan
-garbage collection; Day 4 does not claim distributed transaction semantics.
+garbage collection; Day 5 does not claim distributed transaction semantics.
 
 ## Contribution workflow
 
@@ -319,7 +355,8 @@ checks, and the definition of done.
 2. Identity and tenant isolation with explicit threat modeling.
 3. Document ingestion, provenance, and access-controlled storage.
 4. Citation-grounded retrieval and automated evaluation.
-5. Human-approved workflows, audit evidence, and an independent MCP server.
-6. Hardened observability and production deployment.
+5. Grounded single-turn answers, server-validated citations, and abstention.
+6. Human-approved workflows, audit evidence, and an independent MCP server.
+7. Hardened observability and production deployment.
 
 Roadmap items describe intended direction, not completed production features.

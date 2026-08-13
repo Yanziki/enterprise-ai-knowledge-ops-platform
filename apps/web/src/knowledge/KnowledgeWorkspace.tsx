@@ -15,6 +15,7 @@ import {
   type DocumentVersion,
 } from '../api/client'
 import { KnowledgeSearch } from './KnowledgeSearch'
+import { AskKnowledge } from './AskKnowledge'
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024
 const SUPPORTED_EXTENSIONS = ['.pdf', '.txt', '.md', '.markdown']
@@ -385,6 +386,14 @@ export function KnowledgeWorkspace({
           </button>
           <RequestMessage state={uploadState} />
         </form>
+      )}
+
+      {canSearch && (
+        <AskKnowledge
+          api={api}
+          organizationSlug={organizationSlug}
+          workspaceSlug={workspaceSlug}
+        />
       )}
 
       {canSearch && (

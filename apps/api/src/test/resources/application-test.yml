@@ -8,6 +8,8 @@ app:
   retrieval:
     embedding-mode: deterministic-smoke
     worker-enabled: false
+  answer:
+    provider: deterministic-smoke
 
 logging:
   level:

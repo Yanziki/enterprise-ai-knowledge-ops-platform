@@ -24,7 +24,7 @@ type IdentityState =
   | { phase: 'unavailable' }
 
 const futureModules = [
-  ['Conversations', 'Grounded assistance with inspectable evidence.'],
+  ['Conversations', 'Multi-turn assistance and governed session memory.'],
   ['Workflows', 'Human-approved operational actions.'],
   ['Audit', 'Traceable access, approvals, and outcomes.'],
 ] as const
@@ -74,7 +74,7 @@ function App() {
 
 function PublicLanding({ onLogin }: { onLogin: () => void }) {
   return (
-    <PageShell milestone="Document ingestion & provenance">
+    <PageShell milestone="Grounded knowledge answers">
       <section className="hero" aria-labelledby="page-title">
         <p className="eyebrow">Private sources. Verifiable provenance.</p>
         <h1 id="page-title">
@@ -82,7 +82,7 @@ function PublicLanding({ onLogin }: { onLogin: () => void }) {
         </h1>
         <p className="hero-copy">
           Sign in through the local OIDC provider to access private,
-          tenant-scoped document ingestion and immutable source provenance.
+          tenant-scoped documents, cited retrieval, and grounded answers.
         </p>
         <button className="primary-action" type="button" onClick={onLogin}>
           Log in with Keycloak
@@ -165,7 +165,7 @@ function ProtectedDashboard({
   }
 
   return (
-    <PageShell milestone="Authorized hybrid retrieval" onLogout={onLogout}>
+    <PageShell milestone="Grounded knowledge answers" onLogout={onLogout}>
       <main className="dashboard" id="top">
         <section className="dashboard-intro" aria-labelledby="dashboard-title">
           <p className="eyebrow">Protected knowledge operations</p>
@@ -412,15 +412,15 @@ function PlannedModules() {
     <section className="modules" aria-labelledby="modules-title">
       <div className="section-heading">
         <p className="eyebrow">Platform boundaries</p>
-        <h2 id="modules-title">
-          Knowledge retrieval is active. Generation remains planned.
-        </h2>
+        <h2 id="modules-title">Grounded single-turn answers are active.</h2>
       </div>
       <ul className="module-grid">
         <li className="module-card module-card--active">
           <span className="module-number">01</span>
           <h3>Knowledge</h3>
-          <p>Governed originals, deterministic indexes, and cited retrieval.</p>
+          <p>
+            Governed originals, cited retrieval, and server-validated answers.
+          </p>
           <span className="planned">Active milestone</span>
         </li>
         {futureModules.map(([name, description], index) => (
@@ -462,8 +462,10 @@ function PageShell({
       </header>
       {children}
       <footer>
-        <span>Private ingestion and authorized retrieval foundation</span>
-        <span>No generation, chat, or LLM functionality</span>
+        <span>
+          Private ingestion, authorized retrieval, and grounded answers
+        </span>
+        <span>Single-turn only · no chat, agents, or workflow execution</span>
       </footer>
     </div>
   )
@@ -481,7 +483,7 @@ function MessageShell({
   onAction?: () => void
 }) {
   return (
-    <PageShell milestone="Document ingestion & provenance">
+    <PageShell milestone="Grounded knowledge answers">
       <main className="message-panel">
         <p className="eyebrow">Identity boundary</p>
         <h1>{title}</h1>

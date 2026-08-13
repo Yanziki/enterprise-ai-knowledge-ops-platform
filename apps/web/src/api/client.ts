@@ -141,6 +141,26 @@ export interface RetrievalSearchResponse {
   results: RetrievalSearchResult[]
 }
 
+export type AnswerStatus = 'ANSWERED' | 'INSUFFICIENT_EVIDENCE'
+
+export interface AnswerCitation extends RetrievalCitation {
+  citationId: string
+  chunkId: string
+}
+
+export interface AnswerResponse {
+  requestId: string
+  status: AnswerStatus
+  answer: string
+  requestedRetrievalMode: RetrievalMode
+  effectiveRetrievalMode: Exclude<RetrievalMode, 'AUTO'>
+  retrievedChunkCount: number
+  contextCharacters: number
+  provider: string
+  model: string
+  citations: AnswerCitation[]
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -212,6 +232,13 @@ export interface AuthenticatedApiClient {
     mode: RetrievalMode,
     topK: number,
   ): Promise<RetrievalSearchResponse>
+  answer(
+    organizationSlug: string,
+    workspaceSlug: string,
+    question: string,
+    retrievalMode: RetrievalMode,
+    retrievalTopK: number,
+  ): Promise<AnswerResponse>
 }
 
 export function createAuthenticatedApiClient(
@@ -240,6 +267,8 @@ export function createAuthenticatedApiClient(
     `/api/v1/organizations/${encodeURIComponent(organizationSlug)}/workspaces/${encodeURIComponent(workspaceSlug)}/documents`
   const retrievalBase = (organizationSlug: string, workspaceSlug: string) =>
     `/api/v1/organizations/${encodeURIComponent(organizationSlug)}/workspaces/${encodeURIComponent(workspaceSlug)}/retrieval`
+  const answerBase = (organizationSlug: string, workspaceSlug: string) =>
+    `/api/v1/organizations/${encodeURIComponent(organizationSlug)}/workspaces/${encodeURIComponent(workspaceSlug)}/answers`
 
   return {
     getMe: (signal) => request<CurrentUser>('/api/v1/me', { signal }),
@@ -316,5 +345,17 @@ export function createAuthenticatedApiClient(
           body: JSON.stringify({ query, mode, topK }),
         },
       ),
+    answer: (
+      organizationSlug,
+      workspaceSlug,
+      question,
+      retrievalMode,
+      retrievalTopK,
+    ) =>
+      request<AnswerResponse>(answerBase(organizationSlug, workspaceSlug), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, retrievalMode, retrievalTopK }),
+      }),
   }
 }

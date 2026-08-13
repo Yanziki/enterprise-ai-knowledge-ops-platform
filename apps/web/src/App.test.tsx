@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   CurrentUser,
+  AnswerResponse,
   DocumentDetail,
   DocumentPage,
   RetrievalCapabilities,
@@ -138,6 +139,25 @@ const retrievalResponse: RetrievalSearchResponse = {
   ],
 }
 
+const answerResponse: AnswerResponse = {
+  requestId: '80000000-0000-0000-0000-000000000001',
+  status: 'ANSWERED',
+  answer: 'Travel expenses require manager approval before reimbursement.',
+  requestedRetrievalMode: 'AUTO',
+  effectiveRetrievalMode: 'HYBRID',
+  retrievedChunkCount: 1,
+  contextCharacters: 320,
+  provider: 'deterministic-smoke',
+  model: 'extractive-citation-v1-test-only',
+  citations: [
+    {
+      citationId: 'C1',
+      chunkId: retrievalResponse.results[0]!.chunkId,
+      ...retrievalResponse.results[0]!.citation,
+    },
+  ],
+}
+
 function authenticatedFetch(
   profile: CurrentUser,
   options: {
@@ -148,6 +168,7 @@ function authenticatedFetch(
     uploadAccepted?: UploadAccepted
     retrievalCapabilities?: RetrievalCapabilities
     retrievalResponse?: RetrievalSearchResponse
+    answerResponse?: AnswerResponse
   } = {},
 ) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -173,6 +194,9 @@ function authenticatedFetch(
     }
     if (path.endsWith('/retrieval/search') && init?.method === 'POST') {
       return jsonResponse(options.retrievalResponse ?? retrievalResponse, 200)
+    }
+    if (path.endsWith('/answers') && init?.method === 'POST') {
+      return jsonResponse(options.answerResponse ?? answerResponse, 200)
     }
     if (path.includes('/documents/')) {
       return jsonResponse(options.documentDetail ?? {}, 200)
@@ -238,7 +262,7 @@ describe('App identity states', () => {
     )
 
     expect(
-      screen.getByText('Milestone · Document ingestion & provenance'),
+      screen.getByText('Milestone · Grounded knowledge answers'),
     ).toBeInTheDocument()
     expect(actions.signinRedirect).toHaveBeenCalledOnce()
     expect(
@@ -400,7 +424,7 @@ describe('App identity states', () => {
       await screen.findByRole('heading', { name: 'Search indexed knowledge' }),
     ).toBeInTheDocument()
     expect(await screen.findByText('AUTO uses hybrid')).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: 'VECTOR' })).toBeInTheDocument()
+    expect(screen.getAllByRole('option', { name: 'VECTOR' })).toHaveLength(2)
 
     await userEvent.type(screen.getByLabelText('Query'), 'expense approval')
     await userEvent.click(
@@ -423,6 +447,48 @@ describe('App identity states', () => {
     expect(searchCall?.[1]?.method).toBe('POST')
     expect(searchCall?.[1]?.body).toBe(
       JSON.stringify({ query: 'expense approval', mode: 'AUTO', topK: 5 }),
+    )
+  })
+
+  it('generates one grounded answer and renders server-validated citations', async () => {
+    configureAuth({
+      isAuthenticated: true,
+      user: { access_token: 'synthetic-member-token' },
+    })
+    vi.stubGlobal(
+      'fetch',
+      authenticatedFetch(memberProfile, {
+        documentPage: readyDocumentPage,
+        answerResponse,
+      }),
+    )
+    render(<App />)
+
+    const question = await screen.findByLabelText('Question')
+    await userEvent.type(question, 'What approval is required?')
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Generate grounded answer' }),
+    )
+
+    expect(await screen.findByText('Grounded answer')).toBeInTheDocument()
+    expect(
+      screen.getAllByText(
+        'Travel expenses require manager approval before reimbursement.',
+      ),
+    ).toHaveLength(2)
+    expect(screen.getByText('C1')).toBeInTheDocument()
+    expect(
+      screen.getByText(/v1 · document body · offsets 0–57/),
+    ).toBeInTheDocument()
+    const answerCall = vi
+      .mocked(fetch)
+      .mock.calls.find(([path]) => path.toString().endsWith('/answers'))
+    expect(answerCall?.[1]?.body).toBe(
+      JSON.stringify({
+        question: 'What approval is required?',
+        retrievalMode: 'AUTO',
+        retrievalTopK: 5,
+      }),
     )
   })
 
@@ -511,6 +577,9 @@ describe('App identity states', () => {
     ).not.toBeInTheDocument()
     expect(
       screen.queryByRole('heading', { name: 'Search indexed knowledge' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: 'Ask Knowledge' }),
     ).not.toBeInTheDocument()
   })
 

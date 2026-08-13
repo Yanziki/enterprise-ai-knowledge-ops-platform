@@ -14,6 +14,8 @@ app:
     access-key: ${OBJECT_STORAGE_ACCESS_KEY:enterprise_ai_minio}
     secret-key: ${OBJECT_STORAGE_SECRET_KEY:enterprise_ai_minio_dev_only}
     path-style-access: ${OBJECT_STORAGE_PATH_STYLE_ACCESS:true}
+  answer:
+    provider: ${ANSWER_PROVIDER:deterministic-smoke}
 
 logging:
   level:

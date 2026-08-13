@@ -56,6 +56,11 @@ public class RetrievalSearchService {
                         organizationSlug,
                         workspaceSlug,
                         WorkspaceOperation.SEARCH_CONTENT);
+        return searchAuthorized(scope, request);
+    }
+
+    public RetrievalSearchResponse searchAuthorized(
+            WorkspaceAccessContext scope, RetrievalSearchRequest request) {
         UUID queryId = UUID.randomUUID();
         long startedAt = System.nanoTime();
         String query = validQuery(request == null ? null : request.query());

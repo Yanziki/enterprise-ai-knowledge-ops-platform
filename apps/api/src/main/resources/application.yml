@@ -20,6 +20,9 @@ spring:
     multipart:
       max-file-size: 20MB
       max-request-size: 21MB
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
 
 app:
   database:
@@ -58,6 +61,19 @@ app:
     candidate-limit: ${RETRIEVAL_CANDIDATE_LIMIT:50}
     embedding-batch-size: ${RETRIEVAL_EMBEDDING_BATCH_SIZE:32}
     embedding-mode: ${RETRIEVAL_EMBEDDING_MODE:none}
+  answer:
+    provider: ${ANSWER_PROVIDER:none}
+    max-question-characters: ${ANSWER_MAX_QUESTION_CHARACTERS:2000}
+    max-evidence-chunks: ${ANSWER_MAX_EVIDENCE_CHUNKS:8}
+    max-evidence-characters: ${ANSWER_MAX_EVIDENCE_CHARACTERS:600}
+    max-context-characters: ${ANSWER_MAX_CONTEXT_CHARACTERS:8000}
+    max-answer-characters: ${ANSWER_MAX_ANSWER_CHARACTERS:4000}
+    max-output-tokens: ${ANSWER_MAX_OUTPUT_TOKENS:1000}
+    timeout-millis: ${ANSWER_TIMEOUT_MILLIS:30000}
+    openai:
+      base-url: ${ANSWER_OPENAI_BASE_URL:https://api.openai.com/v1/}
+      model: ${ANSWER_OPENAI_MODEL:}
+      api-key: ${ANSWER_OPENAI_API_KEY:}
 
 application:
   version: "@project.version@"
