@@ -81,7 +81,8 @@ public class SecurityConfiguration {
                                                 "/api/v1/organizations/*/workspaces/*/documents",
                                                 "/api/v1/organizations/*/workspaces/*/documents/**",
                                                 "/api/v1/organizations/*/workspaces/*/retrieval",
-                                                "/api/v1/organizations/*/workspaces/*/retrieval/**")
+                                                "/api/v1/organizations/*/workspaces/*/retrieval/**",
+                                                "/api/v1/organizations/*/workspaces/*/answers")
                                         .authenticated()
                                         .anyRequest()
                                         .denyAll())

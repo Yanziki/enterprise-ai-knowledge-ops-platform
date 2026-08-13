@@ -111,6 +111,10 @@ services:
       OBJECT_STORAGE_PATH_STYLE_ACCESS: "true"
       RETRIEVAL_EMBEDDING_MODE: ${RETRIEVAL_EMBEDDING_MODE:-deterministic-smoke}
       APP_RETRIEVAL_WORKER_ENABLED: ${RETRIEVAL_WORKER_ENABLED:-true}
+      ANSWER_PROVIDER: ${ANSWER_PROVIDER:-deterministic-smoke}
+      ANSWER_OPENAI_BASE_URL: ${ANSWER_OPENAI_BASE_URL:-https://api.openai.com/v1/}
+      ANSWER_OPENAI_MODEL: ${ANSWER_OPENAI_MODEL:-}
+      ANSWER_OPENAI_API_KEY: ${ANSWER_OPENAI_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

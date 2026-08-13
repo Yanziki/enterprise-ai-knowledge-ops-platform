@@ -56,7 +56,9 @@ this document and the corresponding lockfiles together.
 - **Tika Core and PDFBox:** Tika detects supported media types without enabling
   a broad parser surface; PDFBox performs explicitly bounded page extraction.
 
-Spring AI 2.0.0 is planned for a later milestone and is intentionally absent.
+The Day 5 language-model boundary uses the JDK HTTP client and an
+application-owned interface; no provider SDK or Spring AI dependency is added.
+Spring AI remains absent until a separate compatibility/value decision.
 Spring Modulith is also absent; module boundaries are expressed as Java packages
 until compatibility and value are evaluated separately.
 

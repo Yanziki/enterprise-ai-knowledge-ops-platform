@@ -1,10 +1,13 @@
 package io.github.yanziki.enterpriseai.knowledge.api;
 
+import io.github.yanziki.enterpriseai.answer.CitationValidationException;
+import io.github.yanziki.enterpriseai.answer.LanguageModelException;
 import io.github.yanziki.enterpriseai.knowledge.storage.ObjectStorageException;
 import io.github.yanziki.enterpriseai.knowledge.storage.UploadLimitExceededException;
 import java.time.Instant;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
@@ -15,6 +18,14 @@ public class KnowledgeExceptionHandler {
     @ExceptionHandler(KnowledgeApiException.class)
     ResponseEntity<ErrorResponse> handleKnowledgeError(KnowledgeApiException exception) {
         return response(exception.status(), exception.code(), exception.getMessage());
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    ResponseEntity<ErrorResponse> handleInvalidJson(HttpMessageNotReadableException exception) {
+        return response(
+                HttpStatus.BAD_REQUEST,
+                "INVALID_REQUEST",
+                "The request body is malformed or contains unsupported fields");
     }
 
     @ExceptionHandler({MaxUploadSizeExceededException.class, UploadLimitExceededException.class})
@@ -31,6 +42,22 @@ public class KnowledgeExceptionHandler {
                 HttpStatus.SERVICE_UNAVAILABLE,
                 "STORAGE_FAILURE",
                 "Document storage is temporarily unavailable");
+    }
+
+    @ExceptionHandler(CitationValidationException.class)
+    ResponseEntity<ErrorResponse> handleInvalidModelOutput(CitationValidationException exception) {
+        return response(
+                HttpStatus.BAD_GATEWAY,
+                "MODEL_OUTPUT_INVALID",
+                "The language model response failed grounded citation validation");
+    }
+
+    @ExceptionHandler(LanguageModelException.class)
+    ResponseEntity<ErrorResponse> handleLanguageModelFailure(LanguageModelException exception) {
+        return response(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "ANSWER_PROVIDER_FAILURE",
+                "Answer generation is temporarily unavailable");
     }
 
     private ResponseEntity<ErrorResponse> response(

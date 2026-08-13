@@ -3,9 +3,9 @@
 ## System context
 
 The platform sits between enterprise users and approved enterprise knowledge or
-operations systems. Days 3–4 add private document storage, durable extraction,
-tenant-authorized retrieval indexing, and cited search behind the existing
-authenticated-user and tenant-authorization boundary.
+operations systems. Days 3–5 add private document storage, durable extraction,
+tenant-authorized retrieval, cited search, and bounded grounded answers behind the
+existing authenticated-user and tenant-authorization boundary.
 
 ```mermaid
 flowchart LR
@@ -14,7 +14,7 @@ flowchart LR
   Platform -->|"authorized upload/download"| Storage["Private S3-compatible document storage"]
   Platform -. "planned: source connectors" .-> Sources["Enterprise knowledge sources"]
   Platform -. "planned: approved writes" .-> Ops["Enterprise operations systems"]
-  Platform -. "planned: model requests" .-> Models["Approved model provider"]
+  Platform -->|"optional explicit bounded inference"| Models["Approved OpenAI-compatible model provider"]
   Auditor["Security / auditor"] -. "planned: evidence access" .-> Platform
 ```
 
@@ -31,6 +31,7 @@ flowchart TB
   API -->|"issuer discovery and JWK validation"| IdP
   API -->|"JDBC/TLS in production"| DB[("PostgreSQL 17 + pgvector")]
   API -->|"private S3 protocol"| Objects[("S3-compatible object storage")]
+  API -. "optional HTTPS question + bounded evidence" .-> Models["Approved model provider"]
 
   subgraph Host["Docker Compose network"]
     Web
@@ -69,8 +70,10 @@ published to browsers.
 8. **Embedding boundary:** no remote provider is enabled by default. Explicitly
    enabling one would disclose normalized text and queries and requires governance
    approval. The local deterministic provider never leaves the process.
-9. **Model/tool boundary (planned):** prompts, retrieved content, tool arguments,
-   and outputs are untrusted data subject to authorization and audit controls.
+9. **Model boundary:** remote inference is disabled by default. When explicitly
+   enabled, bounded questions/evidence cross an external boundary. Documents and
+   model output are untrusted; the server validates structured output and owns
+   citation provenance. Tools remain planned and disconnected.
 
 ## Planned external dependencies
 

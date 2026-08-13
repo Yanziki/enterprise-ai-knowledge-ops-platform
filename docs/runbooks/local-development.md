@@ -153,6 +153,26 @@ hold a new READY version before index cutover; cleanup restores the worker even 
 verification fails. The base application default remains `none`, where AUTO uses
 lexical and explicit vector/hybrid requests fail closed.
 
+## Grounded-answer verification and provider selection
+
+The Compose profile uses `ANSWER_PROVIDER=deterministic-smoke`. After retrieval is
+healthy, run:
+
+```bash
+make answer-verify
+```
+
+The verifier proves answer `401`/role/cross-tenant denial, server-owned citation
+provenance, abstention, prompt-injection alias rejection, and archive exclusion.
+It uses synthetic data and never prints tokens, prompts, or credentials.
+
+The base/default provider is `none`. To evaluate an approved OpenAI-compatible
+service, set `ANSWER_PROVIDER=openai-compatible`, an HTTPS
+`ANSWER_OPENAI_BASE_URL`, `ANSWER_OPENAI_MODEL`, and `ANSWER_OPENAI_API_KEY` in
+the runtime secret environment. Never commit the key. Remote enablement sends the
+question and bounded retrieved evidence to that provider and requires privacy,
+retention, and security approval. CI does not call it.
+
 ## Host development
 
 Start the infrastructure containers:

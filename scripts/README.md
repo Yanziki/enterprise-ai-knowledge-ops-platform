@@ -21,4 +21,10 @@ deletes its temporary response files on exit.
   provenance and download hashes, proves MEMBER upload and cross-tenant access
   are denied, checks anonymous object-store access receives `403`, and archives
   the document. It obtains short-lived tokens without printing them and deletes
-  every temporary response and download on exit.
+every temporary response and download on exit.
+
+- `verify-answer.sh` uploads synthetic evidence, waits for its current retrieval
+  index, and verifies grounded `ANSWERED`, safe `INSUFFICIENT_EVIDENCE`, canonical
+  server citations, prompt-injection alias rejection, `401`/role/cross-tenant
+  denial, and immediate archive exclusion. It never prints tokens or provider
+  credentials and requires no remote model.

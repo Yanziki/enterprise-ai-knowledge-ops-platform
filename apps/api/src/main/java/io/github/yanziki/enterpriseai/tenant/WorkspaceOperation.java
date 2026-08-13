@@ -8,5 +8,6 @@ public enum WorkspaceOperation {
     ARCHIVE_DOCUMENT,
     RETRY_INGESTION,
     SEARCH_CONTENT,
+    ANSWER_FROM_KNOWLEDGE,
     INSPECT_RETRIEVAL
 }

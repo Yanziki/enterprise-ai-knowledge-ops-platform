@@ -23,8 +23,8 @@ of the core design.
 4. Expose independently governed tools through an MCP server.
 5. Produce auditable records of access, reasoning inputs, approvals, and effects.
 
-These use cases are roadmap intent and are not implemented in the Foundation
-milestone.
+Grounded single-turn cited answers are implemented in Day 5; operational actions,
+independent tools, and MCP remain roadmap intent.
 
 ## Non-goals
 
