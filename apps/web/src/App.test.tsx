@@ -8,6 +8,8 @@ import type {
   DocumentPage,
   RetrievalCapabilities,
   RetrievalSearchResponse,
+  ReviewCaseDetail,
+  ReviewCasePage,
   UploadAccepted,
 } from './api/client'
 import App from './App'
@@ -158,6 +160,79 @@ const answerResponse: AnswerResponse = {
   ],
 }
 
+const insufficientAnswerResponse: AnswerResponse = {
+  ...answerResponse,
+  requestId: '80000000-0000-0000-0000-000000000002',
+  status: 'INSUFFICIENT_EVIDENCE',
+  answer: 'The available authorized evidence is insufficient to answer safely.',
+  retrievedChunkCount: 0,
+  contextCharacters: 0,
+  citations: [],
+}
+
+const reviewDetail: ReviewCaseDetail = {
+  id: '90000000-0000-0000-0000-000000000001',
+  answerId: answerResponse.requestId,
+  reason: 'USER_ESCALATION',
+  status: 'OPEN',
+  questionPreview: 'What approval is required?',
+  createdBySubject: memberProfile.subject,
+  createdByDisplayName: memberProfile.displayName,
+  assignedToSubject: null,
+  assignedToDisplayName: null,
+  createdAt: '2026-08-19T08:00:00Z',
+  updatedAt: '2026-08-19T08:00:00Z',
+  version: 0,
+  requestNote: 'Please verify this answer.',
+  question: 'What approval is required?',
+  answerStatus: 'ANSWERED',
+  answer: answerResponse.answer,
+  requestedRetrievalMode: 'AUTO',
+  effectiveRetrievalMode: 'HYBRID',
+  retrievedChunkCount: 1,
+  contextCharacters: 320,
+  resolution: null,
+  reviewerNote: null,
+  resolvedBySubject: null,
+  resolvedByDisplayName: null,
+  resolvedAt: null,
+  evidence: [
+    {
+      citationId: 'C1',
+      rank: 1,
+      cited: true,
+      chunkId: answerResponse.citations[0]!.chunkId,
+      documentId: readyDocumentDetail.id,
+      documentTitle: readyDocumentDetail.title,
+      documentVersionId: readyVersion.id,
+      versionNumber: 1,
+      locatorType: 'DOCUMENT',
+      locatorValue: 'body',
+      startCharacter: 0,
+      endCharacter: 57,
+      excerpt: answerResponse.citations[0]!.snippet,
+    },
+  ],
+  auditEvents: [
+    {
+      id: '91000000-0000-0000-0000-000000000001',
+      eventType: 'REVIEW_CASE_CREATED',
+      actorSubject: memberProfile.subject,
+      actorDisplayName: memberProfile.displayName,
+      occurredAt: '2026-08-19T08:00:00Z',
+      metadata: { reason: 'USER_ESCALATION' },
+    },
+  ],
+}
+
+const reviewPage: ReviewCasePage = {
+  content: [reviewDetail],
+  page: 0,
+  size: 50,
+  totalElements: 1,
+  totalPages: 1,
+}
+
 function authenticatedFetch(
   profile: CurrentUser,
   options: {
@@ -169,6 +244,8 @@ function authenticatedFetch(
     retrievalCapabilities?: RetrievalCapabilities
     retrievalResponse?: RetrievalSearchResponse
     answerResponse?: AnswerResponse
+    reviewPage?: ReviewCasePage
+    reviewDetail?: ReviewCaseDetail
   } = {},
 ) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -197,6 +274,24 @@ function authenticatedFetch(
     }
     if (path.endsWith('/answers') && init?.method === 'POST') {
       return jsonResponse(options.answerResponse ?? answerResponse, 200)
+    }
+    if (path.includes('/answers/') && path.endsWith('/review-case')) {
+      return jsonResponse(options.reviewDetail ?? reviewDetail, 201)
+    }
+    if (path.includes('/review-cases?')) {
+      return jsonResponse(
+        options.reviewPage ?? {
+          content: [],
+          page: 0,
+          size: 50,
+          totalElements: 0,
+          totalPages: 0,
+        },
+        200,
+      )
+    }
+    if (path.includes('/review-cases/')) {
+      return jsonResponse(options.reviewDetail ?? reviewDetail, 200)
     }
     if (path.includes('/documents/')) {
       return jsonResponse(options.documentDetail ?? {}, 200)
@@ -262,7 +357,7 @@ describe('App identity states', () => {
     )
 
     expect(
-      screen.getByText('Milestone · Grounded knowledge answers'),
+      screen.getByText('Milestone · Human review and audit'),
     ).toBeInTheDocument()
     expect(actions.signinRedirect).toHaveBeenCalledOnce()
     expect(
@@ -490,6 +585,181 @@ describe('App identity states', () => {
         retrievalTopK: 5,
       }),
     )
+  })
+
+  it('escalates a persisted answer and refreshes the member review inbox', async () => {
+    configureAuth({
+      isAuthenticated: true,
+      user: { access_token: 'synthetic-member-token' },
+    })
+    vi.stubGlobal(
+      'fetch',
+      authenticatedFetch(memberProfile, {
+        documentPage: readyDocumentPage,
+        answerResponse: insufficientAnswerResponse,
+      }),
+    )
+    render(<App />)
+
+    await userEvent.type(
+      await screen.findByLabelText('Question'),
+      'What approval is required?',
+    )
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Generate grounded answer' }),
+    )
+    await userEvent.type(
+      await screen.findByLabelText('Review note (optional)'),
+      'Please verify this answer.',
+    )
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Send to review' }),
+    )
+
+    expect(
+      await screen.findByRole('button', { name: 'Review requested' }),
+    ).toBeDisabled()
+    expect(
+      screen.getByRole('heading', { name: 'Review Inbox' }),
+    ).toBeInTheDocument()
+    const createCall = vi
+      .mocked(fetch)
+      .mock.calls.find(([path]) => path.toString().endsWith('/review-case'))
+    expect(createCall?.[1]?.body).toBe(
+      JSON.stringify({
+        reason: 'INSUFFICIENT_EVIDENCE',
+        note: 'Please verify this answer.',
+      }),
+    )
+  })
+
+  it('lets a tenant admin inspect evidence, claim, and resolve a review', async () => {
+    const adminProfile: CurrentUser = {
+      ...memberProfile,
+      subject: '00000000-0000-0000-0000-000000000001',
+      displayName: 'Platform Admin',
+      email: 'admin@example.com',
+      platformRoles: ['TENANT_ADMIN'],
+      organizations: [{ ...memberOrganization, role: 'TENANT_ADMIN' }],
+    }
+    const claimed: ReviewCaseDetail = {
+      ...reviewDetail,
+      status: 'IN_REVIEW',
+      assignedToSubject: adminProfile.subject,
+      assignedToDisplayName: adminProfile.displayName,
+      version: 1,
+      auditEvents: [
+        ...reviewDetail.auditEvents,
+        {
+          id: '91000000-0000-0000-0000-000000000002',
+          eventType: 'REVIEW_CASE_CLAIMED',
+          actorSubject: adminProfile.subject,
+          actorDisplayName: adminProfile.displayName,
+          occurredAt: '2026-08-19T08:01:00Z',
+          metadata: {},
+        },
+      ],
+    }
+    configureAuth({
+      isAuthenticated: true,
+      user: { access_token: 'synthetic-admin-token' },
+    })
+    const fetchMock = authenticatedFetch(adminProfile, {
+      reviewPage,
+      reviewDetail,
+    })
+    fetchMock.mockImplementation(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = input.toString()
+        if (path.endsWith('/claim')) return jsonResponse(claimed)
+        if (path.endsWith('/resolve')) {
+          return jsonResponse({
+            ...claimed,
+            status: 'RESOLVED',
+            resolution: 'EVIDENCE_CONFIRMED',
+            reviewerNote: 'Citation confirmed.',
+            version: 2,
+          } satisfies ReviewCaseDetail)
+        }
+        return authenticatedFetch(adminProfile, {
+          reviewPage,
+          reviewDetail,
+        })(input, init)
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    expect(
+      await screen.findByText('What approval is required?'),
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Open review' }))
+    expect(await screen.findByText('Evidence snapshot')).toBeInTheDocument()
+    expect(screen.getByText('Append-only audit timeline')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Claim review' }))
+    await userEvent.type(
+      await screen.findByLabelText('Reviewer note'),
+      'Citation confirmed.',
+    )
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Resolve review' }),
+    )
+
+    const resolveCall = fetchMock.mock.calls.find(([path]) =>
+      path.toString().endsWith('/resolve'),
+    )
+    expect(resolveCall?.[1]?.body).toBe(
+      JSON.stringify({
+        resolution: 'EVIDENCE_CONFIRMED',
+        reviewerNote: 'Citation confirmed.',
+        version: 1,
+      }),
+    )
+  })
+
+  it('surfaces a concurrent review conflict instead of overwriting state', async () => {
+    const adminProfile: CurrentUser = {
+      ...memberProfile,
+      subject: '00000000-0000-0000-0000-000000000001',
+      displayName: 'Platform Admin',
+      platformRoles: ['TENANT_ADMIN'],
+      organizations: [{ ...memberOrganization, role: 'TENANT_ADMIN' }],
+    }
+    configureAuth({
+      isAuthenticated: true,
+      user: { access_token: 'synthetic-admin-token' },
+    })
+    const fallback = authenticatedFetch(adminProfile, {
+      reviewPage,
+      reviewDetail,
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+        input.toString().endsWith('/claim')
+          ? jsonResponse(
+              {
+                code: 'REVIEW_CASE_ALREADY_CLAIMED',
+                message: 'The review case is no longer available to claim',
+              },
+              409,
+            )
+          : fallback(input, init),
+      ),
+    )
+    render(<App />)
+
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Open review' }),
+    )
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Claim review' }),
+    )
+    expect(
+      await screen.findByText(
+        'This case changed in another session. The latest state has been loaded.',
+      ),
+    ).toBeInTheDocument()
   })
 
   it('shows tenant-admin upload validation and accepted processing state', async () => {

@@ -191,7 +191,8 @@ class GroundedAnswerComponentsTest {
                         assembler,
                         new LanguageModelProviderRegistry(List.of()),
                         validator,
-                        properties);
+                        properties,
+                        mock(AnswerAttemptStore.class));
 
         assertThatThrownBy(
                         () ->
@@ -264,7 +265,8 @@ class GroundedAnswerComponentsTest {
                         assembler,
                         new LanguageModelProviderRegistry(List.of(provider)),
                         validator,
-                        properties);
+                        properties,
+                        mock(AnswerAttemptStore.class));
         var logger =
                 (ch.qos.logback.classic.Logger)
                         org.slf4j.LoggerFactory.getLogger(GroundedAnswerService.class);
