@@ -82,7 +82,10 @@ public class SecurityConfiguration {
                                                 "/api/v1/organizations/*/workspaces/*/documents/**",
                                                 "/api/v1/organizations/*/workspaces/*/retrieval",
                                                 "/api/v1/organizations/*/workspaces/*/retrieval/**",
-                                                "/api/v1/organizations/*/workspaces/*/answers")
+                                                "/api/v1/organizations/*/workspaces/*/answers",
+                                                "/api/v1/organizations/*/workspaces/*/answers/**",
+                                                "/api/v1/organizations/*/workspaces/*/review-cases",
+                                                "/api/v1/organizations/*/workspaces/*/review-cases/**")
                                         .authenticated()
                                         .anyRequest()
                                         .denyAll())
