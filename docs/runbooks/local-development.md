@@ -60,8 +60,8 @@ Flyway locations are selected only through explicit Spring profiles:
 | `test` | `classpath:db/migration,classpath:db/devdata` | Same deterministic test fixtures |
 
 `V2__identity_and_tenant_foundation.sql` contains only durable schema. Versioned
-migrations are reserved for durable schema evolution, and V4 is the latest
-versioned migration after Day 4. The explicitly enabled
+migrations are reserved for durable schema evolution, and V5 is the latest
+versioned migration after Day 6. The explicitly enabled
 `db/devdata/R__synthetic_identity_fixtures.sql` repeatable migration contains the
 application organizations, workspaces, profiles, and memberships without
 advancing the versioned schema number. Its deterministic inserts use
@@ -112,7 +112,7 @@ asserts:
 - a member receives 403 from the admin endpoint;
 - a platform admin can read the admin summary.
 - pgvector and the explicit repeatable fixture migration exist;
-- Flyway records no version 900 and reports V4 as the latest versioned migration;
+- Flyway records no version 900 and reports V5 as the latest versioned migration;
 - organization-level and valid same-organization workspace memberships succeed;
 - an Acme membership paired with Globex Research is rejected by
   `memberships_workspace_organization_fk`.
