@@ -25,8 +25,8 @@ type IdentityState =
 
 const futureModules = [
   ['Conversations', 'Multi-turn assistance and governed session memory.'],
-  ['Workflows', 'Human-approved operational actions.'],
-  ['Audit', 'Traceable access, approvals, and outcomes.'],
+  ['Workflows', 'Human review of persisted answers and evidence.'],
+  ['Audit', 'Append-only review lifecycle events and actor history.'],
 ] as const
 
 function App() {
@@ -74,7 +74,7 @@ function App() {
 
 function PublicLanding({ onLogin }: { onLogin: () => void }) {
   return (
-    <PageShell milestone="Grounded knowledge answers">
+    <PageShell milestone="Human review and audit">
       <section className="hero" aria-labelledby="page-title">
         <p className="eyebrow">Private sources. Verifiable provenance.</p>
         <h1 id="page-title">
@@ -165,7 +165,7 @@ function ProtectedDashboard({
   }
 
   return (
-    <PageShell milestone="Grounded knowledge answers" onLogout={onLogout}>
+    <PageShell milestone="Human review and audit" onLogout={onLogout}>
       <main className="dashboard" id="top">
         <section className="dashboard-intro" aria-labelledby="dashboard-title">
           <p className="eyebrow">Protected knowledge operations</p>
@@ -412,7 +412,7 @@ function PlannedModules() {
     <section className="modules" aria-labelledby="modules-title">
       <div className="section-heading">
         <p className="eyebrow">Platform boundaries</p>
-        <h2 id="modules-title">Grounded single-turn answers are active.</h2>
+        <h2 id="modules-title">Grounded answers now support human review.</h2>
       </div>
       <ul className="module-grid">
         <li className="module-card module-card--active">
@@ -424,11 +424,16 @@ function PlannedModules() {
           <span className="planned">Active milestone</span>
         </li>
         {futureModules.map(([name, description], index) => (
-          <li className="module-card" key={name}>
+          <li
+            className={`module-card ${name === 'Conversations' ? '' : 'module-card--active'}`}
+            key={name}
+          >
             <span className="module-number">0{index + 2}</span>
             <h3>{name}</h3>
             <p>{description}</p>
-            <span className="planned">Planned</span>
+            <span className="planned">
+              {name === 'Conversations' ? 'Planned' : 'Active milestone'}
+            </span>
           </li>
         ))}
       </ul>
@@ -463,9 +468,11 @@ function PageShell({
       {children}
       <footer>
         <span>
-          Private ingestion, authorized retrieval, and grounded answers
+          Private ingestion, grounded answers, and governed human review
         </span>
-        <span>Single-turn only · no chat, agents, or workflow execution</span>
+        <span>
+          Review decisions only · no chat, agents, or automated actions
+        </span>
       </footer>
     </div>
   )
@@ -483,7 +490,7 @@ function MessageShell({
   onAction?: () => void
 }) {
   return (
-    <PageShell milestone="Grounded knowledge answers">
+    <PageShell milestone="Human review and audit">
       <main className="message-panel">
         <p className="eyebrow">Identity boundary</p>
         <h1>{title}</h1>

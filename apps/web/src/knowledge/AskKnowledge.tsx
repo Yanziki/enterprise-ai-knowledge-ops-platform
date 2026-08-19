@@ -10,10 +10,12 @@ export function AskKnowledge({
   api,
   organizationSlug,
   workspaceSlug,
+  onReviewRequested,
 }: {
   api: AuthenticatedApiClient
   organizationSlug: string
   workspaceSlug: string
+  onReviewRequested?: () => void
 }) {
   const [question, setQuestion] = useState('')
   const [mode, setMode] = useState<RetrievalMode>('AUTO')
@@ -21,6 +23,10 @@ export function AskKnowledge({
   const [response, setResponse] = useState<AnswerResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [reviewNote, setReviewNote] = useState('')
+  const [reviewState, setReviewState] = useState<
+    'idle' | 'submitting' | 'created' | 'error'
+  >('idle')
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -28,6 +34,7 @@ export function AskKnowledge({
     setLoading(true)
     setError(null)
     setResponse(null)
+    setReviewState('idle')
     try {
       setResponse(
         await api.answer(
@@ -42,6 +49,26 @@ export function AskKnowledge({
       setError(answerError(requestError))
     } finally {
       setLoading(false)
+    }
+  }
+
+  const requestReview = async () => {
+    if (!response) return
+    setReviewState('submitting')
+    try {
+      await api.createReviewCase(
+        organizationSlug,
+        workspaceSlug,
+        response.requestId,
+        response.status === 'INSUFFICIENT_EVIDENCE'
+          ? 'INSUFFICIENT_EVIDENCE'
+          : 'USER_ESCALATION',
+        reviewNote,
+      )
+      setReviewState('created')
+      onReviewRequested?.()
+    } catch {
+      setReviewState('error')
     }
   }
 
@@ -158,6 +185,38 @@ export function AskKnowledge({
             {response.contextCharacters} context characters · request{' '}
             {shortId(response.requestId)}
           </p>
+          <div className="review-request">
+            <label htmlFor="review-request-note">Review note (optional)</label>
+            <textarea
+              id="review-request-note"
+              rows={2}
+              maxLength={1000}
+              value={reviewNote}
+              disabled={reviewState === 'created'}
+              onChange={(event) => setReviewNote(event.target.value)}
+            />
+            <button
+              className="secondary-action"
+              type="button"
+              disabled={
+                reviewState === 'submitting' || reviewState === 'created'
+              }
+              onClick={() => void requestReview()}
+            >
+              {reviewState === 'submitting'
+                ? 'Requesting review…'
+                : reviewState === 'created'
+                  ? 'Review requested'
+                  : response.status === 'INSUFFICIENT_EVIDENCE'
+                    ? 'Send to review'
+                    : 'Request review'}
+            </button>
+            {reviewState === 'error' && (
+              <p className="error-message" role="alert">
+                The review request could not be created.
+              </p>
+            )}
+          </div>
         </article>
       )}
     </section>

@@ -161,6 +161,96 @@ export interface AnswerResponse {
   citations: AnswerCitation[]
 }
 
+export type ReviewReason =
+  'INSUFFICIENT_EVIDENCE' | 'USER_ESCALATION' | 'REVIEW_REQUESTED'
+export type ReviewStatus = 'OPEN' | 'IN_REVIEW' | 'RESOLVED' | 'DISMISSED'
+export type ReviewResolution =
+  | 'EVIDENCE_CONFIRMED'
+  | 'KNOWLEDGE_GAP'
+  | 'DOCUMENT_UPDATE_REQUIRED'
+  | 'QUESTION_OUT_OF_SCOPE'
+  | 'OTHER'
+
+export interface ReviewEvidence {
+  citationId: string
+  rank: number
+  cited: boolean
+  chunkId: string
+  documentId: string
+  documentTitle: string
+  documentVersionId: string
+  versionNumber: number
+  locatorType: 'PAGE' | 'DOCUMENT'
+  locatorValue: string
+  startCharacter: number
+  endCharacter: number
+  excerpt: string
+}
+
+export interface ReviewAuditEvent {
+  id: string
+  eventType:
+    | 'REVIEW_CASE_CREATED'
+    | 'REVIEW_CASE_CLAIMED'
+    | 'REVIEW_CASE_RESOLVED'
+    | 'REVIEW_CASE_DISMISSED'
+  actorSubject: string
+  actorDisplayName: string
+  occurredAt: string
+  metadata: Record<string, unknown>
+}
+
+export interface ReviewCaseSummary {
+  id: string
+  answerId: string
+  reason: ReviewReason
+  status: ReviewStatus
+  questionPreview: string
+  createdBySubject: string
+  createdByDisplayName: string
+  assignedToSubject: string | null
+  assignedToDisplayName: string | null
+  createdAt: string
+  updatedAt: string
+  version: number
+}
+
+export interface ReviewCasePage {
+  content: ReviewCaseSummary[]
+  page: number
+  size: number
+  totalElements: number
+  totalPages: number
+}
+
+export interface ReviewCaseDetail extends ReviewCaseSummary {
+  requestNote: string | null
+  question: string
+  answerStatus: AnswerStatus
+  answer: string
+  requestedRetrievalMode: RetrievalMode
+  effectiveRetrievalMode: Exclude<RetrievalMode, 'AUTO'>
+  retrievedChunkCount: number
+  contextCharacters: number
+  resolution: ReviewResolution | null
+  reviewerNote: string | null
+  resolvedBySubject: string | null
+  resolvedByDisplayName: string | null
+  resolvedAt: string | null
+  evidence: ReviewEvidence[]
+  auditEvents: ReviewAuditEvent[]
+}
+
+export interface ReviewCaseFilters {
+  status?: ReviewStatus
+  reason?: ReviewReason
+  assignedToMe?: boolean
+  unassigned?: boolean
+  createdByMe?: boolean
+  page?: number
+  size?: number
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -239,6 +329,45 @@ export interface AuthenticatedApiClient {
     retrievalMode: RetrievalMode,
     retrievalTopK: number,
   ): Promise<AnswerResponse>
+  createReviewCase(
+    organizationSlug: string,
+    workspaceSlug: string,
+    answerId: string,
+    reason: ReviewReason,
+    note?: string,
+  ): Promise<ReviewCaseDetail>
+  listReviewCases(
+    organizationSlug: string,
+    workspaceSlug: string,
+    filters?: ReviewCaseFilters,
+    signal?: AbortSignal,
+  ): Promise<ReviewCasePage>
+  getReviewCase(
+    organizationSlug: string,
+    workspaceSlug: string,
+    reviewCaseId: string,
+    signal?: AbortSignal,
+  ): Promise<ReviewCaseDetail>
+  claimReviewCase(
+    organizationSlug: string,
+    workspaceSlug: string,
+    reviewCaseId: string,
+  ): Promise<ReviewCaseDetail>
+  resolveReviewCase(
+    organizationSlug: string,
+    workspaceSlug: string,
+    reviewCaseId: string,
+    resolution: ReviewResolution,
+    reviewerNote: string,
+    version: number,
+  ): Promise<ReviewCaseDetail>
+  dismissReviewCase(
+    organizationSlug: string,
+    workspaceSlug: string,
+    reviewCaseId: string,
+    reviewerNote: string,
+    version: number,
+  ): Promise<ReviewCaseDetail>
 }
 
 export function createAuthenticatedApiClient(
@@ -269,6 +398,8 @@ export function createAuthenticatedApiClient(
     `/api/v1/organizations/${encodeURIComponent(organizationSlug)}/workspaces/${encodeURIComponent(workspaceSlug)}/retrieval`
   const answerBase = (organizationSlug: string, workspaceSlug: string) =>
     `/api/v1/organizations/${encodeURIComponent(organizationSlug)}/workspaces/${encodeURIComponent(workspaceSlug)}/answers`
+  const reviewBase = (organizationSlug: string, workspaceSlug: string) =>
+    `/api/v1/organizations/${encodeURIComponent(organizationSlug)}/workspaces/${encodeURIComponent(workspaceSlug)}/review-cases`
 
   return {
     getMe: (signal) => request<CurrentUser>('/api/v1/me', { signal }),
@@ -357,5 +488,81 @@ export function createAuthenticatedApiClient(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question, retrievalMode, retrievalTopK }),
       }),
+    createReviewCase: (
+      organizationSlug,
+      workspaceSlug,
+      answerId,
+      reason,
+      note,
+    ) =>
+      request<ReviewCaseDetail>(
+        `${answerBase(organizationSlug, workspaceSlug)}/${encodeURIComponent(answerId)}/review-case`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason, note: note?.trim() || null }),
+        },
+      ),
+    listReviewCases: (
+      organizationSlug,
+      workspaceSlug,
+      filters = {},
+      signal,
+    ) => {
+      const parameters = new URLSearchParams({
+        page: String(filters.page ?? 0),
+        size: String(filters.size ?? 20),
+      })
+      if (filters.status) parameters.set('status', filters.status)
+      if (filters.reason) parameters.set('reason', filters.reason)
+      if (filters.assignedToMe) parameters.set('assignedToMe', 'true')
+      if (filters.unassigned) parameters.set('unassigned', 'true')
+      if (filters.createdByMe) parameters.set('createdByMe', 'true')
+      return request<ReviewCasePage>(
+        `${reviewBase(organizationSlug, workspaceSlug)}?${parameters}`,
+        { signal },
+      )
+    },
+    getReviewCase: (organizationSlug, workspaceSlug, reviewCaseId, signal) =>
+      request<ReviewCaseDetail>(
+        `${reviewBase(organizationSlug, workspaceSlug)}/${encodeURIComponent(reviewCaseId)}`,
+        { signal },
+      ),
+    claimReviewCase: (organizationSlug, workspaceSlug, reviewCaseId) =>
+      request<ReviewCaseDetail>(
+        `${reviewBase(organizationSlug, workspaceSlug)}/${encodeURIComponent(reviewCaseId)}/claim`,
+        { method: 'POST' },
+      ),
+    resolveReviewCase: (
+      organizationSlug,
+      workspaceSlug,
+      reviewCaseId,
+      resolution,
+      reviewerNote,
+      version,
+    ) =>
+      request<ReviewCaseDetail>(
+        `${reviewBase(organizationSlug, workspaceSlug)}/${encodeURIComponent(reviewCaseId)}/resolve`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resolution, reviewerNote, version }),
+        },
+      ),
+    dismissReviewCase: (
+      organizationSlug,
+      workspaceSlug,
+      reviewCaseId,
+      reviewerNote,
+      version,
+    ) =>
+      request<ReviewCaseDetail>(
+        `${reviewBase(organizationSlug, workspaceSlug)}/${encodeURIComponent(reviewCaseId)}/dismiss`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reviewerNote, version }),
+        },
+      ),
   }
 }
