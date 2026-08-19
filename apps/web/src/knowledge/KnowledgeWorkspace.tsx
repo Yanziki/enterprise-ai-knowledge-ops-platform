@@ -16,6 +16,7 @@ import {
 } from '../api/client'
 import { KnowledgeSearch } from './KnowledgeSearch'
 import { AskKnowledge } from './AskKnowledge'
+import { ReviewInbox } from '../workflow/ReviewInbox'
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024
 const SUPPORTED_EXTENSIONS = ['.pdf', '.txt', '.md', '.markdown']
@@ -60,6 +61,7 @@ export function KnowledgeWorkspace({
   const [actionState, setActionState] = useState<RequestState>({
     phase: 'idle',
   })
+  const [reviewReloadKey, setReviewReloadKey] = useState(0)
 
   useEffect(() => {
     setWorkspaceSlug(selectedOrganization?.workspaces.at(0)?.slug ?? '')
@@ -393,6 +395,18 @@ export function KnowledgeWorkspace({
           api={api}
           organizationSlug={organizationSlug}
           workspaceSlug={workspaceSlug}
+          onReviewRequested={() => setReviewReloadKey((current) => current + 1)}
+        />
+      )}
+
+      {canSearch && (
+        <ReviewInbox
+          api={api}
+          user={user}
+          organizationSlug={organizationSlug}
+          workspaceSlug={workspaceSlug}
+          canManage={canManage}
+          reloadKey={reviewReloadKey}
         />
       )}
 

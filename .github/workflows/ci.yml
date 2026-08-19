@@ -96,6 +96,7 @@ jobs:
           ./scripts/verify-document-ingestion.sh
           ./scripts/verify-retrieval.sh
           ./scripts/verify-answer.sh
+          ./scripts/verify-review.sh
       - name: Capture service logs
         if: failure()
         run: docker compose logs --no-color

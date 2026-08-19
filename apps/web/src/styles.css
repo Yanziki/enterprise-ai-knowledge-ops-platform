@@ -886,6 +886,112 @@ code {
   color: #f08f7a !important;
 }
 
+.review-request {
+  display: grid;
+  max-width: 680px;
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid #29413b;
+  gap: 10px;
+}
+
+.review-request button {
+  justify-self: start;
+}
+
+.review-inbox {
+  margin-top: 34px;
+  padding: 30px;
+  border: 1px solid #29413b;
+  background: #0a1714;
+}
+
+.review-inbox-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 22px;
+}
+
+.review-inbox-heading h3,
+.review-inbox-heading h4 {
+  margin: 4px 0 10px;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 2rem;
+  font-weight: 400;
+}
+
+.review-filters {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 24px 0;
+}
+
+.review-filters label,
+.review-decision label {
+  display: grid;
+  gap: 6px;
+}
+
+.review-filters .review-toggle {
+  display: flex;
+  align-items: center;
+  padding-bottom: 9px;
+  gap: 7px;
+}
+
+.review-detail {
+  margin-top: 28px;
+  padding: 26px;
+  border: 1px solid #4f8b79;
+  background: #07110f;
+}
+
+.review-detail h5 {
+  margin: 24px 0 10px;
+  color: #72d5b7;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.review-snapshot {
+  max-width: 850px;
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.review-actions,
+.review-decision {
+  display: grid;
+  max-width: 720px;
+  margin: 26px 0;
+  gap: 14px;
+}
+
+.review-actions {
+  display: flex;
+}
+
+.audit-timeline ol {
+  display: grid;
+  margin: 0;
+  padding: 0 0 0 20px;
+  gap: 12px;
+}
+
+.audit-timeline li {
+  padding-left: 8px;
+}
+
+.audit-timeline span {
+  display: block;
+  color: #91a29d;
+  font-size: 0.85rem;
+}
+
 .message-panel {
   display: grid;
   min-height: 70vh;
@@ -990,7 +1096,8 @@ footer {
   }
 
   .search-heading,
-  .search-summary {
+  .search-summary,
+  .review-inbox-heading {
     align-items: stretch;
     flex-direction: column;
   }
@@ -1012,7 +1119,9 @@ footer {
 
   .document-panel,
   .document-detail,
-  .upload-panel {
+  .upload-panel,
+  .review-inbox,
+  .review-detail {
     padding: 22px;
   }
 

@@ -12,7 +12,9 @@ public enum WorkspaceAccessRole {
                     WorkspaceOperation.READ_METADATA,
                     WorkspaceOperation.DOWNLOAD_ORIGINAL,
                     WorkspaceOperation.SEARCH_CONTENT,
-                    WorkspaceOperation.ANSWER_FROM_KNOWLEDGE)),
+                    WorkspaceOperation.ANSWER_FROM_KNOWLEDGE,
+                    WorkspaceOperation.CREATE_REVIEW_CASE,
+                    WorkspaceOperation.VIEW_REVIEW_CASES)),
     AUDITOR(1, EnumSet.of(WorkspaceOperation.READ_METADATA));
 
     private final int privilege;

@@ -28,3 +28,10 @@ every temporary response and download on exit.
   server citations, prompt-injection alias rejection, `401`/role/cross-tenant
   denial, and immediate archive exclusion. It never prints tokens or provider
   credentials and requires no remote model.
+
+- `verify-review.sh` creates a deterministic insufficient-evidence answer, sends
+  it to review as the synthetic member, opens the frozen evidence snapshot as
+  the synthetic admin, claims and resolves it as a knowledge gap, and verifies
+  the ordered append-only lifecycle timeline. It never prints access tokens or
+  provider credentials and intentionally leaves the closed case in the local
+  database as demo evidence.

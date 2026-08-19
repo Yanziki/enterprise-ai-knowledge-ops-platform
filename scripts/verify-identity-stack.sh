@@ -192,7 +192,7 @@ assert_database_scalar 1 'pgvector extension is installed' \
   "SELECT COUNT(*) FROM pg_extension WHERE extname = 'vector';"
 assert_database_scalar 0 'no version 900 migration is recorded' \
   "SELECT COUNT(*) FROM flyway_schema_history WHERE version = '900' AND success;"
-assert_database_scalar 4 'latest successful versioned migration is V4' \
+assert_database_scalar 5 'latest successful versioned migration is V5' \
   "SELECT MAX(version::integer) FROM flyway_schema_history WHERE success AND version ~ '^[0-9]+$';"
 assert_database_scalar 1 'repeatable development fixture is applied successfully' \
   "SELECT CASE WHEN COUNT(*) >= 1 THEN 1 ELSE 0 END FROM flyway_schema_history WHERE version IS NULL AND description = 'synthetic identity fixtures' AND success;"

@@ -772,7 +772,7 @@ class EnterpriseAiApplicationIT {
                                 "SELECT MAX(version::integer) FROM flyway_schema_history"
                                         + " WHERE success AND version ~ '^[0-9]+$'",
                                 Integer.class))
-                .isEqualTo(4);
+                .isEqualTo(5);
         assertThat(
                         jdbcTemplate.queryForObject(
                                 "SELECT COUNT(*) FROM flyway_schema_history"
@@ -833,8 +833,8 @@ class EnterpriseAiApplicationIT {
                                 queryForInt(
                                         connection,
                                         "SELECT COUNT(*) FROM flyway_schema_history"
-                                                + " WHERE version IN ('1', '2', '3', '4') AND success"))
-                        .isEqualTo(4);
+                                                + " WHERE version IN ('1', '2', '3', '4', '5') AND success"))
+                        .isEqualTo(5);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -846,7 +846,7 @@ class EnterpriseAiApplicationIT {
                                         connection,
                                         "SELECT MAX(version::integer) FROM flyway_schema_history"
                                                 + " WHERE success AND version ~ '^[0-9]+$'"))
-                        .isEqualTo(4);
+                        .isEqualTo(5);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -899,7 +899,7 @@ class EnterpriseAiApplicationIT {
                                         connection,
                                         "SELECT MAX(version::integer) FROM flyway_schema_history"
                                                 + " WHERE success AND version ~ '^[0-9]+$'"))
-                        .isEqualTo(4);
+                        .isEqualTo(5);
                 assertThat(
                                 queryForInt(
                                         connection,
@@ -911,7 +911,7 @@ class EnterpriseAiApplicationIT {
             }
 
             Files.writeString(
-                    futureMigrationLocation.resolve("V5__future_migration_probe.sql"),
+                    futureMigrationLocation.resolve("V6__future_migration_probe.sql"),
                     "CREATE TABLE future_migration_probe (id INTEGER PRIMARY KEY);\n",
                     StandardCharsets.UTF_8);
 
@@ -936,7 +936,7 @@ class EnterpriseAiApplicationIT {
                                 queryForInt(
                                         connection,
                                         "SELECT COUNT(*) FROM flyway_schema_history"
-                                                + " WHERE version = '5' AND success"))
+                                                + " WHERE version = '6' AND success"))
                         .isEqualTo(1);
                 assertThat(
                                 queryForInt(
@@ -1881,6 +1881,278 @@ class EnterpriseAiApplicationIT {
     }
 
     @Test
+    void reviewCasePreservesAnswerEvidenceAndEnforcesTheFullLifecycle() throws Exception {
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        String memberToken = token(MEMBER_SUBJECT, List.of("MEMBER"), futureExpiry());
+        String adminToken = token(ADMIN_SUBJECT, List.of("TENANT_ADMIN"), futureExpiry());
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(versionId, documentId, 1, "review-evidence");
+            insertTestTextUnit(
+                    UUID.randomUUID(),
+                    versionId,
+                    1,
+                    "Silverpine policy requires a signed manager approval form.");
+            markTestVersionReady(versionId);
+            indexReadyVersions(versionId);
+
+            var answer =
+                    groundedAnswerService.answer(
+                            authentication(MEMBER_SUBJECT, "MEMBER"),
+                            "acme",
+                            "operations",
+                            new AnswerRequest("Silverpine policy", RetrievalMode.LEXICAL, 5));
+            String createPath =
+                    "/api/v1/organizations/acme/workspaces/operations/answers/"
+                            + answer.requestId()
+                            + "/review-case";
+            HttpResponse<String> created =
+                    postJson(
+                            createPath,
+                            memberToken,
+                            "{\"reason\":\"USER_ESCALATION\","
+                                    + "\"note\":\"Please verify the approval requirement.\"}");
+            assertThat(created.statusCode()).isEqualTo(201);
+            UUID reviewCaseId = UUID.fromString(jsonString(created.body(), "id"));
+            assertThat(created.body())
+                    .contains(
+                            "\"status\":\"OPEN\"",
+                            "Silverpine policy",
+                            "signed manager approval form",
+                            "\"citationId\":\"C1\"",
+                            documentId.toString(),
+                            versionId.toString())
+                    .doesNotContain("providerId", "modelId", "deterministic-smoke");
+
+            HttpResponse<String> idempotent =
+                    postJson(createPath, memberToken, "{\"reason\":\"REVIEW_REQUESTED\"}");
+            assertThat(idempotent.statusCode()).isEqualTo(200);
+            assertThat(jsonString(idempotent.body(), "id")).isEqualTo(reviewCaseId.toString());
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT COUNT(*) FROM review_cases"
+                                            + " WHERE answer_attempt_id = ?"
+                                            + " AND status IN ('OPEN', 'IN_REVIEW')",
+                                    Integer.class,
+                                    answer.requestId()))
+                    .isEqualTo(1);
+
+            String casePath =
+                    "/api/v1/organizations/acme/workspaces/operations/review-cases/" + reviewCaseId;
+            HttpResponse<String> memberList =
+                    get(
+                            "/api/v1/organizations/acme/workspaces/operations/review-cases"
+                                    + "?createdByMe=true&reason=USER_ESCALATION&page=0&size=10",
+                            memberToken);
+            assertThat(memberList.statusCode()).isEqualTo(200);
+            assertThat(memberList.body()).contains(reviewCaseId.toString(), "\"totalElements\":1");
+            assertThat(post(casePath + "/claim", memberToken).statusCode()).isEqualTo(403);
+
+            HttpResponse<String> claimed = post(casePath + "/claim", adminToken);
+            assertThat(claimed.statusCode()).isEqualTo(200);
+            assertThat(claimed.body()).contains("\"status\":\"IN_REVIEW\"", ADMIN_SUBJECT);
+            long claimedVersion = objectMapper.readTree(claimed.body()).path("version").asLong();
+
+            HttpResponse<String> resolved =
+                    postJson(
+                            casePath + "/resolve",
+                            adminToken,
+                            "{\"resolution\":\"EVIDENCE_CONFIRMED\","
+                                    + "\"reviewerNote\":\"The persisted citation supports the answer.\","
+                                    + "\"version\":"
+                                    + claimedVersion
+                                    + "}");
+            assertThat(resolved.statusCode()).isEqualTo(200);
+            assertThat(resolved.body())
+                    .contains(
+                            "\"status\":\"RESOLVED\"",
+                            "\"resolution\":\"EVIDENCE_CONFIRMED\"",
+                            "signed manager approval form");
+            assertThat(postJson(casePath + "/dismiss", adminToken, "{}").statusCode())
+                    .isEqualTo(409);
+
+            HttpResponse<String> audit = get(casePath + "/audit-events", memberToken);
+            assertThat(audit.statusCode()).isEqualTo(200);
+            assertThat(audit.body())
+                    .containsSubsequence(
+                            "REVIEW_CASE_CREATED", "REVIEW_CASE_CLAIMED", "REVIEW_CASE_RESOLVED");
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT COUNT(*) FROM audit_events WHERE aggregate_id = ?",
+                                    Integer.class,
+                                    reviewCaseId))
+                    .isEqualTo(3);
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void concurrentReviewClaimsProduceExactlyOneWinnerAndOneAuditEvent() throws Exception {
+        UUID answerId = UUID.randomUUID();
+        UUID secondAdminProfileId = insertTemporaryProfile("second-review-admin");
+        String secondAdminSubject =
+                jdbcTemplate.queryForObject(
+                        "SELECT identity_subject FROM user_profiles WHERE id = ?",
+                        String.class,
+                        secondAdminProfileId);
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO memberships"
+                            + " (id, user_profile_id, organization_id, workspace_id, role)"
+                            + " VALUES (?, ?, ?, NULL, 'TENANT_ADMIN')",
+                    UUID.randomUUID(),
+                    secondAdminProfileId,
+                    ACME_ORGANIZATION_ID);
+            insertTestAnswer(answerId, MEMBER_SUBJECT, "Which claim should win?");
+            String memberToken = token(MEMBER_SUBJECT, List.of("MEMBER"), futureExpiry());
+            HttpResponse<String> created =
+                    postJson(
+                            "/api/v1/organizations/acme/workspaces/operations/answers/"
+                                    + answerId
+                                    + "/review-case",
+                            memberToken,
+                            "{\"reason\":\"REVIEW_REQUESTED\"}");
+            UUID reviewCaseId = UUID.fromString(jsonString(created.body(), "id"));
+            String claimPath =
+                    "/api/v1/organizations/acme/workspaces/operations/review-cases/"
+                            + reviewCaseId
+                            + "/claim";
+            String firstToken = token(ADMIN_SUBJECT, List.of("TENANT_ADMIN"), futureExpiry());
+            String secondToken = token(secondAdminSubject, List.of("TENANT_ADMIN"), futureExpiry());
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+            try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                Future<HttpResponse<String>> first =
+                        executor.submit(
+                                () -> {
+                                    awaitStart(ready, start);
+                                    return post(claimPath, firstToken);
+                                });
+                Future<HttpResponse<String>> second =
+                        executor.submit(
+                                () -> {
+                                    awaitStart(ready, start);
+                                    return post(claimPath, secondToken);
+                                });
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+                start.countDown();
+                assertThat(List.of(first.get().statusCode(), second.get().statusCode()))
+                        .containsExactlyInAnyOrder(200, 409);
+            }
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT COUNT(*) FROM audit_events"
+                                            + " WHERE aggregate_id = ?"
+                                            + " AND event_type = 'REVIEW_CASE_CLAIMED'",
+                                    Integer.class,
+                                    reviewCaseId))
+                    .isEqualTo(1);
+            String assignee =
+                    jdbcTemplate.queryForObject(
+                            "SELECT assigned_to_subject FROM review_cases WHERE id = ?",
+                            String.class,
+                            reviewCaseId);
+            assertThat(assignee).isIn(ADMIN_SUBJECT, secondAdminSubject);
+            String nonAssigneeToken = assignee.equals(ADMIN_SUBJECT) ? secondToken : firstToken;
+            assertThat(
+                            postJson(
+                                            claimPath.replace("/claim", "/resolve"),
+                                            nonAssigneeToken,
+                                            "{\"resolution\":\"OTHER\",\"version\":1}")
+                                    .statusCode())
+                    .isEqualTo(403);
+        } finally {
+            deleteTestAnswer(answerId);
+            deleteTemporaryProfile(secondAdminProfileId);
+        }
+    }
+
+    @Test
+    void reviewEndpointsPreserveTenantRoleAndCreatorBoundaries() throws Exception {
+        UUID answerId = UUID.randomUUID();
+        UUID adminAnswerId = UUID.randomUUID();
+        try {
+            insertTestAnswer(answerId, MEMBER_SUBJECT, "Acme-only review question");
+            insertTestAnswer(adminAnswerId, ADMIN_SUBJECT, "Administrator review question");
+            String memberToken = token(MEMBER_SUBJECT, List.of("MEMBER"), futureExpiry());
+            String adminToken = token(ADMIN_SUBJECT, List.of("TENANT_ADMIN"), futureExpiry());
+            String globexToken = token(OTHER_SUBJECT, List.of("MEMBER"), futureExpiry());
+            String auditorToken =
+                    token(
+                            "00000000-0000-0000-0000-000000000004",
+                            List.of("AUDITOR"),
+                            futureExpiry());
+            HttpResponse<String> created =
+                    postJson(
+                            "/api/v1/organizations/acme/workspaces/operations/answers/"
+                                    + answerId
+                                    + "/review-case",
+                            memberToken,
+                            "{\"reason\":\"REVIEW_REQUESTED\"}");
+            UUID reviewCaseId = UUID.fromString(jsonString(created.body(), "id"));
+            String casePath =
+                    "/api/v1/organizations/acme/workspaces/operations/review-cases/" + reviewCaseId;
+
+            assertThat(
+                            postJson(
+                                            "/api/v1/organizations/globex/workspaces/research/answers/"
+                                                    + answerId
+                                                    + "/review-case",
+                                            globexToken,
+                                            "{\"reason\":\"REVIEW_REQUESTED\"}")
+                                    .statusCode())
+                    .isEqualTo(404);
+            assertThat(get(casePath, globexToken).statusCode()).isEqualTo(403);
+            assertThat(get(casePath, auditorToken).statusCode()).isEqualTo(403);
+            assertThat(post(casePath + "/claim", memberToken).statusCode()).isEqualTo(403);
+            assertThat(get(casePath, adminToken).statusCode()).isEqualTo(200);
+
+            HttpResponse<String> adminCreated =
+                    postJson(
+                            "/api/v1/organizations/acme/workspaces/operations/answers/"
+                                    + adminAnswerId
+                                    + "/review-case",
+                            adminToken,
+                            "{\"reason\":\"REVIEW_REQUESTED\"}");
+            String adminCasePath =
+                    "/api/v1/organizations/acme/workspaces/operations/review-cases/"
+                            + jsonString(adminCreated.body(), "id");
+            assertThat(get(adminCasePath, memberToken).statusCode()).isEqualTo(404);
+            assertThat(
+                            get(
+                                            "/api/v1/organizations/acme/workspaces/operations/review-cases"
+                                                    + "?page=0&size=20",
+                                            memberToken)
+                                    .body())
+                    .contains(reviewCaseId.toString())
+                    .doesNotContain(jsonString(adminCreated.body(), "id"));
+            String adminCaseId = jsonString(adminCreated.body(), "id");
+            HttpResponse<String> dismissed =
+                    postJson(
+                            "/api/v1/organizations/acme/workspaces/operations/review-cases/"
+                                    + adminCaseId
+                                    + "/dismiss",
+                            adminToken,
+                            "{\"reviewerNote\":\"No review action is required.\",\"version\":0}");
+            assertThat(dismissed.statusCode()).isEqualTo(200);
+            assertThat(dismissed.body()).contains("\"status\":\"DISMISSED\"");
+            assertThat(
+                            jdbcTemplate.queryForObject(
+                                    "SELECT COUNT(*) FROM audit_events"
+                                            + " WHERE aggregate_id = ?"
+                                            + " AND event_type = 'REVIEW_CASE_DISMISSED'",
+                                    Integer.class,
+                                    UUID.fromString(adminCaseId)))
+                    .isEqualTo(1);
+        } finally {
+            deleteTestAnswer(answerId);
+            deleteTestAnswer(adminAnswerId);
+        }
+    }
+
+    @Test
     void deterministicAnswerEvaluationWritesArtifactAndMeetsGroundingGates() throws Exception {
         Path dataset =
                 Path.of("..", "..", "tests", "fixtures", "answer", "golden-answer.jsonl")
@@ -2344,7 +2616,34 @@ class EnterpriseAiApplicationIT {
     }
 
     private void deleteTemporaryProfile(UUID profileId) {
+        jdbcTemplate.update("DELETE FROM memberships WHERE user_profile_id = ?", profileId);
         jdbcTemplate.update("DELETE FROM user_profiles WHERE id = ?", profileId);
+    }
+
+    private void insertTestAnswer(UUID answerId, String creatorSubject, String question) {
+        jdbcTemplate.update(
+                "INSERT INTO answer_attempts"
+                        + " (id, organization_id, workspace_id, created_by_subject, question,"
+                        + " status, answer_text, requested_retrieval_mode, effective_retrieval_mode,"
+                        + " retrieved_chunk_count, context_characters, provider_id, model_id)"
+                        + " VALUES (?, ?, ?, ?, ?, 'ANSWERED', 'Persisted bounded answer.',"
+                        + " 'LEXICAL', 'LEXICAL', 0, 0, 'integration-test', 'review-fixture')",
+                answerId,
+                ACME_ORGANIZATION_ID,
+                ACME_WORKSPACE_ID,
+                creatorSubject,
+                question);
+    }
+
+    private void deleteTestAnswer(UUID answerId) {
+        jdbcTemplate.update(
+                "DELETE FROM audit_events WHERE aggregate_id IN"
+                        + " (SELECT id FROM review_cases WHERE answer_attempt_id = ?)",
+                answerId);
+        jdbcTemplate.update("DELETE FROM review_cases WHERE answer_attempt_id = ?", answerId);
+        jdbcTemplate.update(
+                "DELETE FROM answer_attempt_evidence WHERE answer_attempt_id = ?", answerId);
+        jdbcTemplate.update("DELETE FROM answer_attempts WHERE id = ?", answerId);
     }
 
     private void insertTestDocument(UUID documentId) {
@@ -2632,6 +2931,25 @@ class EnterpriseAiApplicationIT {
     }
 
     private void deleteTestDocument(UUID documentId) {
+        List<UUID> answerAttemptIds =
+                jdbcTemplate.queryForList(
+                        "SELECT DISTINCT answer_attempt_id FROM answer_attempt_evidence"
+                                + " WHERE document_id = ?",
+                        UUID.class,
+                        documentId);
+        for (UUID answerAttemptId : answerAttemptIds) {
+            jdbcTemplate.update(
+                    "DELETE FROM audit_events WHERE aggregate_id IN"
+                            + " (SELECT id FROM review_cases WHERE answer_attempt_id = ?)",
+                    answerAttemptId);
+            jdbcTemplate.update(
+                    "DELETE FROM review_cases WHERE answer_attempt_id = ?", answerAttemptId);
+        }
+        jdbcTemplate.update(
+                "DELETE FROM answer_attempt_evidence WHERE document_id = ?", documentId);
+        for (UUID answerAttemptId : answerAttemptIds) {
+            jdbcTemplate.update("DELETE FROM answer_attempts WHERE id = ?", answerAttemptId);
+        }
         jdbcTemplate.update("DELETE FROM retrieval_chunks WHERE document_id = ?", documentId);
         jdbcTemplate.update(
                 "DELETE FROM retrieval_index_jobs WHERE retrieval_index_id IN"

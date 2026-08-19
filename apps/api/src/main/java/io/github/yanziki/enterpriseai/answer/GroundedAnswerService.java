@@ -39,6 +39,7 @@ public class GroundedAnswerService {
     private final LanguageModelProviderRegistry providerRegistry;
     private final StructuredAnswerValidator answerValidator;
     private final AnswerProperties properties;
+    private final AnswerAttemptStore answerAttemptStore;
 
     public GroundedAnswerService(
             WorkspaceAuthorizationService authorizationService,
@@ -46,13 +47,15 @@ public class GroundedAnswerService {
             GroundedContextAssembler contextAssembler,
             LanguageModelProviderRegistry providerRegistry,
             StructuredAnswerValidator answerValidator,
-            AnswerProperties properties) {
+            AnswerProperties properties,
+            AnswerAttemptStore answerAttemptStore) {
         this.authorizationService = authorizationService;
         this.retrievalSearchService = retrievalSearchService;
         this.contextAssembler = contextAssembler;
         this.providerRegistry = providerRegistry;
         this.answerValidator = answerValidator;
         this.properties = properties;
+        this.answerAttemptStore = answerAttemptStore;
     }
 
     public AnswerResponse answer(
@@ -98,6 +101,7 @@ public class GroundedAnswerService {
                             context,
                             provider,
                             List.of());
+            answerAttemptStore.persist(scope, question, response, context);
             logOutcome(scope, response, provider, null, startedAt);
             return response;
         }
@@ -123,6 +127,7 @@ public class GroundedAnswerService {
                             context,
                             provider,
                             citations);
+            answerAttemptStore.persist(scope, question, response, context);
             logOutcome(scope, response, provider, completion, startedAt);
             return response;
         } catch (CitationValidationException exception) {

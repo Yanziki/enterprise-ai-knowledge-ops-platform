@@ -5,11 +5,11 @@ traceable, human-supervised operations. The platform is being built as a secure
 modular monolith with a Spring Boot API, React web client, PostgreSQL with
 pgvector, and standards-based identity.
 
-> **Current milestone: Grounded single-turn answers.** Day 5 reuses authorized
-> Day 4 retrieval to assemble bounded untrusted evidence, generate structured
-> answers through an application-owned provider boundary, validate request-local
-> citation aliases on the server, and abstain when evidence is insufficient.
-> Chat, memory, agents, MCP, tools, and workflows remain deliberately absent.
+> **Current milestone: Human review and append-only audit.** Day 6 persists the
+> exact bounded Day 5 answer/evidence snapshot, lets authorized users escalate
+> uncertainty into a workspace-scoped review, serializes reviewer claims, and
+> records every lifecycle transition as a typed audit event. Chat, memory,
+> agents, MCP, tools, and automated workflow execution remain absent.
 
 ## Problem statement
 
@@ -28,8 +28,9 @@ before those capabilities are introduced.
   storage and are sent through one typed bearer-token API client.
 - `postgres`: PostgreSQL 17 with pgvector, Flyway-managed organizations,
   workspaces, memberships, documents, immutable versions, ingestion/index jobs,
-  ordered text units, and cited retrieval chunks. Composite foreign keys enforce
-  tenant ownership through the complete provenance and retrieval hierarchy.
+  ordered text units, cited retrieval chunks, answer snapshots, review cases,
+  and audit events. Composite foreign keys enforce tenant ownership through the
+  complete provenance and review hierarchy.
 - `keycloak`: pinned Keycloak 26.7.0 development container with a deterministic
   imported realm, public web client, API audience, and synthetic users.
 - `object-storage`: pinned MinIO development service with a private bucket. The
@@ -47,6 +48,7 @@ See the [system context](docs/architecture/context.md),
 [document-ingestion architecture](docs/architecture/document-ingestion.md),
 [retrieval architecture](docs/architecture/retrieval.md),
 [grounded-answer architecture](docs/architecture/grounded-answers.md),
+[human-review architecture](docs/day6-review-workflow.md),
 [technology stack](docs/architecture/technology-stack.md), and
 [grounded RAG threat model](docs/security/rag-threat-model.md).
 
@@ -109,8 +111,9 @@ The explicit `local`, `container`, and `test` profiles additionally load
 the idempotent repeatable migration `R__synthetic_identity_fixtures.sql`.
 Versioned migrations are reserved for durable schema evolution, so the fixture
 does not advance the schema version. Day 3 added V3 for document ingestion; Day 4
-adds forward-only V4 for retrieval indexes, durable index jobs, and chunks without
-modifying V1, V2, or V3. If the repeatable fixture checksum changes,
+added V4 for retrieval indexes, durable index jobs, and chunks; Day 6 adds V5 for
+answer snapshots, review cases, and audit events without modifying V1–V4. If the
+repeatable fixture checksum changes,
 Flyway reruns its `INSERT ... ON CONFLICT DO NOTHING` statements without deleting,
 overwriting, or duplicating existing fixture records. Synthetic application data
 and Keycloak users remain local/test-only.
@@ -226,6 +229,29 @@ HTML.
 
 ![Grounded answer with server-validated citation provenance](docs/assets/day-5-grounded-answer.png)
 
+## Human review and audit
+
+Every Day 5 answer attempt is now persisted with the exact bounded evidence and
+canonical provenance that entered its context. A member can request human review
+from the answer card, then follow their own case in the workspace Review Inbox.
+Tenant and platform administrators can inspect the frozen question, answer, and
+evidence, claim one unassigned case, and resolve or dismiss it. Review detail does
+not rerun retrieval or generation.
+
+The enforced lifecycle is `OPEN → IN_REVIEW → RESOLVED`, with dismissal allowed
+from `OPEN` or `IN_REVIEW`. Invalid or stale transitions return `409`. Claim and
+completion lock the scoped review row, while a version column prevents stale UI
+decisions. A partial database index allows at most one active case per answer.
+State changes and their `REVIEW_CASE_CREATED`, `REVIEW_CASE_CLAIMED`,
+`REVIEW_CASE_RESOLVED`, or `REVIEW_CASE_DISMISSED` event commit together.
+
+Members can create/view only their own review content. `TENANT_ADMIN` and
+`PLATFORM_ADMIN` reviewers can manage cases within their authorized scope;
+`AUDITOR` remains unable to read answer/evidence content. Review responses omit
+provider configuration, model identifiers, prompts, object keys, credentials,
+and tokens. See the [Day 6 review workflow](docs/day6-review-workflow.md) for the
+API, schema, race handling, and local demo.
+
 ## Authorization behavior
 
 - `/api/v1/system/status` and Actuator health probes remain public.
@@ -283,6 +309,17 @@ It proves answer `401`/role/cross-tenant denial, canonical server citations,
 controlled abstention, prompt-injection alias rejection, and archive exclusion
 using only the deterministic local provider.
 
+Run the deterministic human-review demonstration:
+
+```bash
+make review-verify
+```
+
+It creates an `INSUFFICIENT_EVIDENCE` answer, escalates it as the member, opens
+the frozen evidence snapshot as the admin, claims and resolves the case as a
+`KNOWLEDGE_GAP`, and verifies the ordered append-only audit timeline. It uses
+only synthetic local identities and never prints tokens or credentials.
+
 ## Verification
 
 Run the repository test suites and static checks:
@@ -307,14 +344,17 @@ docker compose ps
 make identity-verify
 make knowledge-verify
 make retrieval-verify
+make answer-verify
+make review-verify
 ```
 
 Backend integration tests require a working Docker daemon because they use a
 real pgvector-enabled PostgreSQL container, never H2. CI repeats both suites,
-builds the Compose stack, checks pgvector, and runs identity, ingestion, and
-retrieval/answer verifiers. The backend suite writes and CI publishes
-`retrieval-evaluation.json` and `answer-evaluation.json`. The identity verifier also proves the repeatable local
-fixture was explicitly applied without recording version 900, confirms V4 is the latest versioned
+builds the Compose stack, checks pgvector, and runs identity, ingestion,
+retrieval, and answer verifiers. The backend suite writes and CI publishes
+`retrieval-evaluation.json` and `answer-evaluation.json`. The identity verifier
+also proves the repeatable local fixture was explicitly applied without
+recording version 900, confirms V5 is the latest versioned
 migration, accepts same-organization and nullable-workspace memberships in
 rollback-only transactions, and confirms the database rejects Acme membership
 paired with the Globex Research workspace.
@@ -325,14 +365,15 @@ troubleshooting, follow the
 
 ## Explicitly unfinished
 
-Day 5 does not implement malware scanning, OCR, password-protected PDF support,
+Day 6 does not implement malware scanning, OCR, password-protected PDF support,
 Office/image/HTML/URL/ZIP ingestion, physical retention deletion, per-object
 encryption keys, separate production-grade object-storage identities, public
 registration, password reset, social login, production identity deployment,
 production secrets, billing, a production embedding adapter, production LLM
 approval/operations, ANN indexes, model reindex orchestration, chat, memory,
-reranking, agents, MCP, tool calling, audit business workflows, Redis, Kafka, Elasticsearch,
-OpenSearch, Kubernetes, or cloud deployment. Extraction is bounded parsing, not a
+reranking, agents, MCP, tool calling, Redis, Kafka, Elasticsearch, OpenSearch,
+Kubernetes, or cloud deployment. It also does not implement review notifications,
+SLAs, reassignment, generic BPMN, or automated remediation. Extraction is bounded parsing, not a
 claim that uploaded content is safe. The `simple` PostgreSQL tokenizer has limited
 stemming and CJK segmentation, and exact vector scans target the current bounded
 corpus rather than large-scale production workloads.
@@ -341,7 +382,7 @@ Object storage and PostgreSQL are not written atomically. The API attempts a
 narrow compensating object delete when database persistence fails, but a process
 or container crash after the S3 write and before the metadata commit can leave an
 orphaned object. Production hardening must add reconciliation and bounded orphan
-garbage collection; Day 5 does not claim distributed transaction semantics.
+garbage collection; Day 6 does not claim distributed transaction semantics.
 
 ## Contribution workflow
 
@@ -356,7 +397,7 @@ checks, and the definition of done.
 3. Document ingestion, provenance, and access-controlled storage.
 4. Citation-grounded retrieval and automated evaluation.
 5. Grounded single-turn answers, server-validated citations, and abstention.
-6. Human-approved workflows, audit evidence, and an independent MCP server.
-7. Hardened observability and production deployment.
+6. Human review workflow and append-only audit evidence.
+7. Independent MCP boundary, hardened observability, and production deployment.
 
 Roadmap items describe intended direction, not completed production features.
