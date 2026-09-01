@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.0</version>
+        <version>4.1.1</version>
         <relativePath/>
     </parent>
 
@@ -22,9 +22,9 @@
         <maven.version>3.9.11</maven.version>
         <spotless-maven-plugin.version>2.46.1</spotless-maven-plugin.version>
         <google-java-format.version>1.28.0</google-java-format.version>
-        <aws-sdk.version>2.46.8</aws-sdk.version>
+        <aws-sdk.version>2.54.7</aws-sdk.version>
         <tika.version>3.3.2</tika.version>
-        <pdfbox.version>3.0.7</pdfbox.version>
+        <pdfbox.version>3.0.8</pdfbox.version>
     </properties>
 
     <dependencies>
