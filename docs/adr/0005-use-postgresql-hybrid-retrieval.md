@@ -28,8 +28,9 @@ Use PostgreSQL for both retrieval paths:
 Use an application-owned `EmbeddingProvider` interface. No remote provider is
 enabled by default. A deterministic 64-dimensional hashed-feature provider exists
 only in `test`, local smoke, and composed verification configuration. It proves
-plumbing and vector correctness; it is not a semantic-quality claim. A future
-remote adapter must be explicitly configured and governance-approved.
+plumbing and vector correctness; it is not a semantic-quality claim. The
+OpenAI-compatible adapter (added after Day 6) must be explicitly configured and
+governance-approved.
 
 Do not add Spring AI. Spring AI 2.0 is compatible with Spring Boot 4.1, but Day 4
 needs only a small batch/query embedding boundary. Adding its broader model API
