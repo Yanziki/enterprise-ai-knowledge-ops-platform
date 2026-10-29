@@ -28,8 +28,8 @@ this document and the corresponding lockfiles together.
 | Object-storage client | AWS SDK for Java S3 | 2.46.8 |
 | MIME detection | Apache Tika Core | 3.3.2 |
 | PDF extraction | Apache PDFBox | 3.0.7 |
-| Local object storage | MinIO server | RELEASE.2025-09-07T16-13-09Z |
-| Local storage bootstrap | MinIO Client (`mc`) | RELEASE.2025-08-13T08-35-41Z |
+| Local object storage | RustFS server (Apache-2.0) | 1.0.3 |
+| Local storage bootstrap | AWS CLI v2 | 2.38.6 |
 
 ## Why these technologies
 
@@ -52,7 +52,7 @@ this document and the corresponding lockfiles together.
   Authorization Code + PKCE and explicit session-storage configuration.
 - **S3-compatible object storage and AWS SDK:** originals stay outside the
   relational database behind a small application-owned interface, while local
-  MinIO exercises the same private-bucket boundary used by the API and tests.
+  RustFS exercises the same private-bucket boundary used by the API and tests.
 - **Tika Core and PDFBox:** Tika detects supported media types without enabling
   a broad parser surface; PDFBox performs explicitly bounded page extraction.
 

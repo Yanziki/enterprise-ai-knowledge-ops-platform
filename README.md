@@ -33,7 +33,7 @@ before those capabilities are introduced.
   complete provenance and review hierarchy.
 - `keycloak`: pinned Keycloak 26.7.0 development container with a deterministic
   imported realm, public web client, API audience, and synthetic users.
-- `object-storage`: pinned MinIO development service with a private bucket. The
+- `object-storage`: pinned RustFS development service with a private bucket. The
   API is the only browser-facing path for originals; object keys and storage
   credentials never leave the backend.
 - `infra/nginx`: same-origin frontend and API reverse proxy.
@@ -156,7 +156,7 @@ does not pretend that the original or provenance was physically erased.
 Every operation re-resolves the authenticated subject, organization, workspace,
 membership, role, and resource ownership on the server. The UI is not an
 authorization boundary. Downloads are streamed through the API after that check;
-the private MinIO/S3-compatible bucket is never made anonymous and the browser
+the private S3-compatible bucket is never made anonymous and the browser
 receives no object key or storage credential.
 
 The completed Knowledge UI and document provenance views are captured here:

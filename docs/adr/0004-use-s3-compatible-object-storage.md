@@ -20,16 +20,16 @@ changing document-domain authorization or lifecycle logic.
 
 Store original binaries in a private S3-compatible bucket through an application
 interface named `ObjectStorage`. The production adapter uses AWS SDK for Java v2
-S3 protocol APIs. The local Compose environment uses a pinned MinIO-compatible
-server and client solely as development infrastructure.
+S3 protocol APIs. The local Compose environment uses a pinned S3-compatible
+server and bootstrap client solely as development infrastructure.
 
 Selected versions for Day 3 are:
 
 | Component | Version |
 | --- | --- |
 | AWS SDK for Java v2 S3 | 2.46.8 |
-| MinIO-compatible server image | `minio/minio:RELEASE.2025-09-07T16-13-09Z` |
-| MinIO client/bootstrap image | `minio/mc:RELEASE.2025-08-13T08-35-41Z` |
+| S3-compatible server image | `rustfs/rustfs:1.0.3` (originally `minio/minio:RELEASE.2025-09-07T16-13-09Z`) |
+| Bucket bootstrap image | `amazon/aws-cli:2.38.6` (originally `minio/mc:RELEASE.2025-08-13T08-35-41Z`) |
 
 Application code depends on S3 semantics, not MinIO-specific APIs. Production may
 point the adapter at AWS S3 or another compatible provider after validating its
@@ -98,3 +98,15 @@ migration and must never trust rewritten client input.
 - Server-side encryption, versioned buckets, object lock, lifecycle policies,
   malware scanning, cross-region replication, and production key management are
   later deployment/hardening decisions.
+
+## Amendment: MinIO images withdrawn (2026-10-29)
+
+MinIO stopped distributing community container images, and the pinned
+`minio/minio` and `minio/mc` tags can no longer be pulled from Docker Hub or
+Quay, which broke every Testcontainers and Compose run in CI (#28). The local
+and test server is now RustFS 1.0.3 (Apache-2.0), and the one-shot bucket
+bootstrap uses the official AWS CLI with generic S3 calls: create the bucket if
+absent, remove any bucket policy, and fail if a policy remains. Because the
+application already depends only on S3 protocol APIs, no domain or adapter
+code changed. The decision itself — private S3-compatible storage behind
+`ObjectStorage` — is unchanged.
