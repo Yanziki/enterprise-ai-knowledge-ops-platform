@@ -29,30 +29,64 @@ public class RetrievalIndexReconciler {
     }
 
     @Transactional
-    public int enqueueMissingReadyVersions() {
+    public int enqueueMissingOrStaleIndexes() {
         Optional<EmbeddingProvider> provider = providerRegistry.activeProvider();
         String providerId = provider.map(EmbeddingProvider::providerId).orElse(null);
         String modelId = provider.map(EmbeddingProvider::modelId).orElse(null);
         Integer dimension = provider.map(EmbeddingProvider::dimension).orElse(null);
         return jdbcTemplate.update(
                 """
-                WITH candidates AS (
+                WITH active AS (
+                    SELECT CAST(? AS VARCHAR) AS provider,
+                           CAST(? AS VARCHAR) AS model,
+                           CAST(? AS INTEGER) AS dimension
+                ), candidates AS (
                     SELECT version.id AS version_id,
                            version.document_id,
                            version.organization_id,
-                           version.workspace_id
+                           version.workspace_id,
+                           COALESCE((
+                               SELECT MAX(existing.generation)
+                               FROM retrieval_indexes AS existing
+                               WHERE existing.document_version_id = version.id
+                           ), 0) + 1 AS generation
                     FROM document_versions AS version
                     JOIN documents AS document
                       ON document.id = version.document_id
                      AND document.organization_id = version.organization_id
                      AND document.workspace_id = version.workspace_id
+                    CROSS JOIN active
                     WHERE version.ingestion_status = 'READY'
                       AND document.status = 'ACTIVE'
                       AND NOT EXISTS (
                           SELECT 1
                           FROM retrieval_indexes AS existing
                           WHERE existing.document_version_id = version.id
-                            AND existing.generation = 1
+                            AND (
+                                existing.status IN ('QUEUED', 'PROCESSING')
+                                OR (
+                                    existing.status IN ('READY', 'FAILED')
+                                    AND existing.embedding_provider
+                                        IS NOT DISTINCT FROM active.provider
+                                    AND existing.embedding_model
+                                        IS NOT DISTINCT FROM active.model
+                                    AND existing.embedding_dimension
+                                        IS NOT DISTINCT FROM active.dimension
+                                )
+                            )
+                      )
+                      AND (
+                          NOT EXISTS (
+                              SELECT 1
+                              FROM retrieval_indexes AS existing
+                              WHERE existing.document_version_id = version.id
+                          )
+                          OR EXISTS (
+                              SELECT 1
+                              FROM retrieval_indexes AS existing
+                              WHERE existing.document_version_id = version.id
+                                AND existing.status IN ('READY', 'FAILED')
+                          )
                       )
                     ORDER BY version.created_at, version.id
                     LIMIT ?
@@ -62,21 +96,26 @@ public class RetrievalIndexReconciler {
                         generation, status, chunker_name, chunker_version, chunk_size,
                         chunk_overlap, embedding_provider, embedding_model, embedding_dimension
                     )
-                    SELECT CAST(md5(candidate.version_id::text || ':retrieval-index:1') AS uuid),
+                    SELECT CAST(md5(
+                               candidate.version_id::text
+                               || ':retrieval-index:'
+                               || candidate.generation::text
+                           ) AS uuid),
                            candidate.document_id,
                            candidate.version_id,
                            candidate.organization_id,
                            candidate.workspace_id,
-                           1,
+                           candidate.generation,
                            'QUEUED',
                            ?,
                            ?,
                            ?,
                            ?,
-                           ?,
-                           ?,
-                           ?
+                           active.provider,
+                           active.model,
+                           active.dimension
                     FROM candidates AS candidate
+                    CROSS JOIN active
                     ON CONFLICT (document_version_id, generation) DO NOTHING
                     RETURNING id, document_version_id, organization_id, workspace_id
                 )
@@ -93,13 +132,13 @@ public class RetrievalIndexReconciler {
                 FROM inserted_indexes AS index
                 ON CONFLICT (retrieval_index_id) DO NOTHING
                 """,
+                providerId,
+                modelId,
+                dimension,
                 properties.claimBatchSize(),
                 chunker.name(),
                 chunker.version(),
                 chunker.chunkSize(),
-                chunker.overlap(),
-                providerId,
-                modelId,
-                dimension);
+                chunker.overlap());
     }
 }

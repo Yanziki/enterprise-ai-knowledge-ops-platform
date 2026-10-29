@@ -59,7 +59,8 @@ stateDiagram-v2
 ```
 
 A scheduled reconciliation transaction inserts generation 1 plus one job for
-every READY version that lacks an index. Unique constraints and `ON CONFLICT DO
+every READY version that lacks an index, and the next generation when the active
+embedding configuration changed (see [Embedding model changes](#embedding-model-changes)). Unique constraints and `ON CONFLICT DO
 NOTHING` make deployment backfill and concurrent pollers idempotent. Jobs use
 `FOR UPDATE SKIP LOCKED`, at most three attempts, and stale-claim recovery. Chunk
 writes and READY transition commit together.
@@ -91,13 +92,54 @@ provider. It is test plumbing, not a meaningful production embedding model.
 
 No Spring AI or other dependency was added. A narrow application-owned interface
 keeps the retrieval domain independent of commercial adapters and avoids pulling
-chat/model APIs into the Day 4 dependency graph. Remote-provider timeouts and
-reindex orchestration remain requirements for the future adapter that introduces
-that boundary.
+chat/model APIs into the Day 4 dependency graph.
 
-If a future remote provider is enabled, extracted text and search queries cross
-the platform boundary. That must be opt-in, time-bounded, secret-safe, and approved
+`RETRIEVAL_EMBEDDING_MODE=openai-compatible` enables the one real adapter. It
+calls `POST {base-url}/embeddings` with the JDK HTTP client and works with any
+service that implements the OpenAI embeddings contract (hosted APIs, gateways,
+or a local model server). Its configuration is explicit and validated at
+startup:
+
+| Setting | Purpose |
+| --- | --- |
+| `RETRIEVAL_OPENAI_BASE_URL` | HTTPS base URL; plain HTTP is accepted only for `localhost`/`127.0.0.1` |
+| `RETRIEVAL_OPENAI_MODEL` | Model identifier recorded on every index and chunk |
+| `RETRIEVAL_OPENAI_API_KEY` | Sent only as a bearer header; never logged or returned |
+| `RETRIEVAL_OPENAI_DIMENSION` | Expected vector length; every response vector must match it |
+| `RETRIEVAL_OPENAI_SEND_DIMENSIONS` | Also sends `dimensions` for models that support shortened vectors |
+| `RETRIEVAL_OPENAI_TIMEOUT_MILLIS` | Connect and request timeout (default 30 s) |
+
+Responses are reordered by their `index` field and rejected as a whole when the
+count, indexes, or values are malformed. Throttling (`429`), server errors, I/O
+errors, and timeouts are retryable within the existing three-attempt job bound;
+other client errors such as a rejected key or unknown model fail the job
+without retrying. At query time a provider failure returns
+`503 EMBEDDING_PROVIDER_FAILURE` instead of silently falling back to lexical.
+
+When this provider is enabled, extracted text and search queries cross the
+platform boundary. That must be opt-in, time-bounded, secret-safe, and approved
 through organizational privacy/data-governance review.
+
+## Embedding model changes
+
+Every index records the provider, model, and dimension it was built with, and
+vector search compares only chunks with exactly the active values. The scheduled
+reconciler therefore treats a change of embedding configuration as a migration:
+
+1. A READY version with no index at all receives generation 1, as before.
+2. A version whose READY or FAILED indexes were all built with a different
+   embedding configuration, and that has no QUEUED or PROCESSING index,
+   receives the next generation with the active configuration.
+3. Versions whose only indexes are SUPERSEDED (older document versions) are
+   never re-embedded, so a model change does not pay to embed obsolete content.
+4. A FAILED index built with the active configuration is not regenerated, so
+   failures stay bounded rather than looping.
+
+The previous READY generation stays searchable lexically until the new generation
+completes; normal cutover then supersedes it. While a migration is running,
+vector and hybrid search include only documents already re-embedded with the
+active model. Switching back to an earlier model re-embeds again, because
+superseded generations are never revived.
 
 ## Candidate authorization and last-known-good versions
 
@@ -165,10 +207,15 @@ duration. Neither path logs actual query/chunk text or embeddings.
 
 ## Known limitations
 
-- Only immutable generation 1 is reconciled automatically; there is no admin
-  reindex/model-migration endpoint yet.
-- Base/production configuration has no semantic embedding adapter. The local
-  deterministic provider validates plumbing only.
+- Embedding-model migrations are automatic, but there is no admin endpoint to
+  force a rebuild under the same configuration. Indexes that failed permanently
+  with the active configuration (for example because of a rejected API key) stay
+  FAILED until a new generation is created by changing the configuration.
+- Base/production configuration still defaults to no embedding provider; the
+  OpenAI-compatible adapter must be enabled explicitly. The local deterministic
+  provider validates plumbing only.
+- Chunking parameters are recorded on each index but changing them does not yet
+  trigger re-indexing.
 - Cosine retrieval is an exact scan without HNSW/IVFFlat, appropriate to the
   current bounded corpus but not yet benchmarked for large tenant datasets.
 - PostgreSQL `simple` full-text configuration provides limited stemming and CJK

@@ -190,9 +190,16 @@ The base/production default has no embedding provider: lexical stays available,
 conflict. The local Compose/test profile explicitly uses a 64-dimensional
 `deterministic-smoke` hashed-token provider so CI can exercise vector plumbing
 without secrets, paid APIs, or internet. It is not a meaningful semantic model.
-Enabling any future remote provider would send normalized document text and search
-queries across an external trust boundary and requires explicit configuration plus
-organizational privacy/data-governance approval.
+
+Real semantic search uses `RETRIEVAL_EMBEDDING_MODE=openai-compatible` with any
+service that implements the OpenAI embeddings API. Set
+`RETRIEVAL_OPENAI_BASE_URL`, `RETRIEVAL_OPENAI_MODEL`, `RETRIEVAL_OPENAI_API_KEY`,
+and `RETRIEVAL_OPENAI_DIMENSION` (see the
+[retrieval architecture](docs/architecture/retrieval.md#embedding-behavior)).
+Changing the embedding model re-indexes current document versions in the
+background while the previous index stays available. Enabling a remote provider
+sends normalized document text and search queries across an external trust
+boundary and requires organizational privacy/data-governance approval.
 
 | Role | Cited content search | Retrieval/index metadata |
 | --- | --- | --- |
@@ -369,8 +376,8 @@ Day 6 does not implement malware scanning, OCR, password-protected PDF support,
 Office/image/HTML/URL/ZIP ingestion, physical retention deletion, per-object
 encryption keys, separate production-grade object-storage identities, public
 registration, password reset, social login, production identity deployment,
-production secrets, billing, a production embedding adapter, production LLM
-approval/operations, ANN indexes, model reindex orchestration, chat, memory,
+production secrets, billing, production LLM approval/operations, ANN indexes,
+chat, memory,
 reranking, agents, MCP, tool calling, Redis, Kafka, Elasticsearch, OpenSearch,
 Kubernetes, or cloud deployment. It also does not implement review notifications,
 SLAs, reassignment, generic BPMN, or automated remediation. Extraction is bounded parsing, not a

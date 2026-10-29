@@ -46,18 +46,18 @@ flowchart LR
 | Snippet XSS | API JSON to React | Plain text, bounded length, React escaping, no raw HTML/Markdown rendering | Future highlighting must preserve encoding |
 | Duplicate indexing/race | Reconciler/worker to DB | Unique version/generation and one-job constraints; `ON CONFLICT`; row claims with `SKIP LOCKED` | Manual DB writes can bypass application sequencing |
 | Stale worker claims | Worker lifecycle | Timed stale recovery and bounded attempt counter | Long provider latency must remain below claim timeout |
-| Model-space mixing | Query vector to chunks | Exact provider/model/dimension equality in vector candidate SQL | Reindex orchestration remains future work |
+| Model-space mixing | Query vector to chunks | Exact provider/model/dimension equality in vector candidate SQL; configuration changes queue a new generation per current version | Vector results cover only re-embedded documents while a migration runs |
 | Similarity inference | Search response | Authorized candidates only, topK cap, no vector/raw hidden tenant statistics | Authorized users can probe content in their own scope |
 | Cross-tenant cache leakage | API/runtime | No shared retrieval-result cache in Day 4 | A future cache must key identity/tenant/version/mode |
 | Candidate-pool denial of service | DB ranking | Tenant-scoped SQL, LIMIT 50 per path, topK 20, query bound | Large single-tenant corpora need measured indexes/quotas |
-| Backfill omission | Deployment to reconciler | Scheduled idempotent scan for every READY version lacking generation 1 | Disabled scheduler delays availability, not authorization |
+| Backfill omission | Deployment to reconciler | Scheduled idempotent scan for every READY version lacking an index for the active embedding configuration | Disabled scheduler delays availability, not authorization |
 | PDF citation fabrication | Chunker to response | Never cross text-unit boundaries; copy persisted locator; tests assert pages | Bad source extraction would propagate existing provenance errors |
 | Silent vector fallback | Capability/mode boundary | Explicit VECTOR/HYBRID fails when unavailable; AUTO reports actual used mode | Users may overestimate deterministic smoke quality without labels |
 
 ## External provider privacy boundary
 
-No remote embedding provider is enabled by default. If one is introduced and
-explicitly configured, normalized document text during indexing and user search
+No remote embedding provider is enabled by default. When the OpenAI-compatible
+adapter is explicitly configured, normalized document text during indexing and user search
 queries during vector retrieval may leave the platform. Production enablement
 requires organizational approval, data-governance and retention review, provider
 contract assessment, regional controls, and secret rotation. The platform must

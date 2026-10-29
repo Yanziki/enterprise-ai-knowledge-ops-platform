@@ -40,7 +40,7 @@ public class RetrievalIndexWorker {
             Instant now = Instant.now();
             jobClaimer.recoverStaleClaims(
                     now.minus(properties.staleClaimSeconds(), ChronoUnit.SECONDS), now);
-            reconciler.enqueueMissingReadyVersions();
+            reconciler.enqueueMissingOrStaleIndexes();
             for (UUID jobId : jobClaimer.claimNextBatch(properties.claimBatchSize(), now)) {
                 try {
                     processor.process(jobId);
