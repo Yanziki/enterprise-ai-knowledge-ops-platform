@@ -1193,7 +1193,7 @@ class EnterpriseAiApplicationIT {
             markTestVersionReady(versionId);
 
             for (int pass = 0; pass < 10; pass++) {
-                retrievalIndexReconciler.enqueueMissingReadyVersions();
+                retrievalIndexReconciler.enqueueMissingOrStaleIndexes();
                 List<UUID> claimed =
                         retrievalIndexJobClaimer.claimNextBatch(4, Instant.now().plusSeconds(1));
                 claimed.forEach(retrievalIndexProcessor::process);
@@ -1207,7 +1207,7 @@ class EnterpriseAiApplicationIT {
                 }
             }
             awaitRetrievalIndex(versionId, "READY");
-            retrievalIndexReconciler.enqueueMissingReadyVersions();
+            retrievalIndexReconciler.enqueueMissingOrStaleIndexes();
 
             assertThat(
                             jdbcTemplate.queryForObject(
@@ -1233,6 +1233,73 @@ class EnterpriseAiApplicationIT {
                     .containsEntry("embedding_provider", "deterministic-smoke")
                     .containsEntry("embedding_model", "hashed-token-v1-test-only")
                     .containsEntry("dimension", 64);
+        } finally {
+            deleteTestDocument(documentId);
+        }
+    }
+
+    @Test
+    void embeddingModelChangeReindexesCurrentVersionsAndKeepsLastKnownGood() {
+        UUID documentId = UUID.randomUUID();
+        UUID firstVersionId = UUID.randomUUID();
+        UUID secondVersionId = UUID.randomUUID();
+        try {
+            insertTestDocument(documentId);
+            insertTestVersion(firstVersionId, documentId, 1, "model-change-v1");
+            insertTestTextUnit(
+                    UUID.randomUUID(), firstVersionId, 1, "Retired policy text for version one.");
+            markTestVersionReady(firstVersionId);
+            insertTestVersion(secondVersionId, documentId, 2, "model-change-v2");
+            insertTestTextUnit(
+                    UUID.randomUUID(),
+                    secondVersionId,
+                    1,
+                    "Laptop refresh requests need director approval.");
+            markTestVersionReady(secondVersionId);
+            indexUntil(firstVersionId, List.of("SUPERSEDED"));
+            assertThat(indexStatuses(firstVersionId)).containsExactly("SUPERSEDED");
+            assertThat(indexStatuses(secondVersionId)).containsExactly("READY");
+
+            jdbcTemplate.update(
+                    "UPDATE retrieval_indexes SET embedding_model = 'retired-model-test-only'"
+                            + " WHERE document_id = ?",
+                    documentId);
+            jdbcTemplate.update(
+                    "UPDATE retrieval_chunks SET embedding_model = 'retired-model-test-only'"
+                            + " WHERE document_id = ?",
+                    documentId);
+            for (int pass = 0; pass < 20; pass++) {
+                retrievalIndexReconciler.enqueueMissingOrStaleIndexes();
+            }
+
+            assertThat(indexStatuses(secondVersionId)).containsExactly("READY", "QUEUED");
+            assertThat(indexStatuses(firstVersionId)).containsExactly("SUPERSEDED");
+            assertThat(
+                            jdbcTemplate.queryForMap(
+                                    "SELECT embedding_provider, embedding_model,"
+                                            + " embedding_dimension FROM retrieval_indexes"
+                                            + " WHERE document_version_id = ? AND generation = 2",
+                                    secondVersionId))
+                    .containsEntry("embedding_provider", "deterministic-smoke")
+                    .containsEntry("embedding_model", "hashed-token-v1-test-only")
+                    .containsEntry("embedding_dimension", 64);
+
+            indexUntil(secondVersionId, List.of("SUPERSEDED", "READY"));
+            retrievalIndexReconciler.enqueueMissingOrStaleIndexes();
+
+            assertThat(indexStatuses(secondVersionId)).containsExactly("SUPERSEDED", "READY");
+            assertThat(indexStatuses(firstVersionId)).containsExactly("SUPERSEDED");
+            assertThat(
+                            jdbcTemplate.queryForList(
+                                    "SELECT DISTINCT chunk.embedding_model"
+                                            + " FROM retrieval_chunks AS chunk"
+                                            + " JOIN retrieval_indexes AS retrieval_index"
+                                            + " ON retrieval_index.id = chunk.retrieval_index_id"
+                                            + " WHERE chunk.document_version_id = ?"
+                                            + " AND retrieval_index.status = 'READY'",
+                                    String.class,
+                                    secondVersionId))
+                    .containsExactly("hashed-token-v1-test-only");
         } finally {
             deleteTestDocument(documentId);
         }
@@ -2903,7 +2970,7 @@ class EnterpriseAiApplicationIT {
 
     private void indexReadyVersions(UUID... targetVersionIds) throws InterruptedException {
         for (int pass = 0; pass < 100; pass++) {
-            retrievalIndexReconciler.enqueueMissingReadyVersions();
+            retrievalIndexReconciler.enqueueMissingOrStaleIndexes();
             retrievalIndexJobClaimer
                     .claimNextBatch(4, Instant.now().plusSeconds(1))
                     .forEach(retrievalIndexProcessor::process);
@@ -2923,6 +2990,26 @@ class EnterpriseAiApplicationIT {
             Thread.sleep(25);
         }
         throw new AssertionError("Retrieval targets did not become READY");
+    }
+
+    private List<String> indexStatuses(UUID versionId) {
+        return jdbcTemplate.queryForList(
+                "SELECT status FROM retrieval_indexes WHERE document_version_id = ?"
+                        + " ORDER BY generation",
+                String.class,
+                versionId);
+    }
+
+    private void indexUntil(UUID versionId, List<String> expectedStatuses) {
+        for (int pass = 0;
+                pass < 20 && !indexStatuses(versionId).equals(expectedStatuses);
+                pass++) {
+            retrievalIndexReconciler.enqueueMissingOrStaleIndexes();
+            retrievalIndexJobClaimer
+                    .claimNextBatch(4, Instant.now().plusSeconds(1))
+                    .forEach(retrievalIndexProcessor::process);
+        }
+        assertThat(indexStatuses(versionId)).isEqualTo(expectedStatuses);
     }
 
     private void assertDocumentStatus(UUID documentId, String expectedStatus) {
