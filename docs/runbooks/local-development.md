@@ -8,7 +8,7 @@ fixtures, not a production deployment.
 ## Prerequisites
 
 Install Git, Java 21, Node.js 24, pnpm 11.9, and Docker Engine with Compose v2.
-Confirm Docker has enough resources for PostgreSQL, Keycloak, MinIO, and
+Confirm Docker has enough resources for PostgreSQL, Keycloak, RustFS, and
 application image builds.
 
 ## Complete container startup
@@ -33,7 +33,7 @@ The service URLs are:
 | API direct port | <http://localhost:8081> |
 | Keycloak | <http://localhost:8082> |
 | Keycloak administration | <http://localhost:8082/admin> |
-| MinIO S3 API (not a public document URL) | <http://localhost:9000> |
+| RustFS S3 API (not a public document URL) | <http://localhost:9000> |
 
 Sign in through the web application with `admin@example.com`,
 `member@example.com`, or `other@example.com`. Their development passwords are
@@ -133,7 +133,7 @@ The verifier uploads `tests/fixtures/knowledge/acme-policy.txt` as the Acme
 tenant administrator, polls the durable job to `READY`, checks parser/uploader/
 locator provenance, and compares the downloaded bytes and SHA-256 to the source.
 It also proves unauthenticated and member uploads are denied, Globex cannot list,
-read, download, or archive the Acme document, anonymous MinIO access is denied,
+read, download, or archive the Acme document, anonymous object-storage access is denied,
 and the administrator can archive the logical document. Tokens, credentials,
 and object keys are not printed.
 
@@ -244,7 +244,11 @@ issuer present in each token.
   web and API logs. The production-style browser path should use the Nginx
   origin at port 8080.
 - **Object storage unhealthy:** inspect `docker compose logs object-storage` and
-  confirm port 9000 is free. The readiness probe uses MinIO's health endpoint.
+  confirm port 9000 is free. The readiness probe uses RustFS's `/health/ready` endpoint.
+- **Leftover MinIO volume:** stacks created before RustFS kept data in the
+  `object-storage-data` volume, which is no longer mounted. Re-upload synthetic
+  documents, then remove the orphaned volume with
+  `docker volume rm enterprise-ai-knowledge-ops-platform_object-storage-data`.
 - **Bucket bootstrap failed:** inspect
   `docker compose logs object-storage-init`; confirm the synthetic access key,
   secret, and bucket name agree across `.env` and the API configuration. The

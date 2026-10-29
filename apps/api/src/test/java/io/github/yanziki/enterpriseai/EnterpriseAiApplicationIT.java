@@ -122,10 +122,10 @@ class EnterpriseAiApplicationIT {
     private static final DockerImageName PGVECTOR_IMAGE =
             DockerImageName.parse("pgvector/pgvector:0.8.1-pg17-bookworm")
                     .asCompatibleSubstituteFor("postgres");
-    private static final DockerImageName MINIO_IMAGE =
-            DockerImageName.parse("minio/minio:RELEASE.2025-09-07T16-13-09Z");
-    private static final String MINIO_ACCESS_KEY = "enterprise_ai_test";
-    private static final String MINIO_SECRET_KEY = "enterprise_ai_test_secret";
+    private static final DockerImageName OBJECT_STORAGE_IMAGE =
+            DockerImageName.parse("rustfs/rustfs:1.0.3");
+    private static final String OBJECT_STORAGE_ACCESS_KEY = "enterprise_ai_test";
+    private static final String OBJECT_STORAGE_SECRET_KEY = "enterprise_ai_test_secret";
     private static final String DOCUMENT_BUCKET = "enterprise-ai-documents-test";
     private static final HttpClient HTTP_CLIENT =
             HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -140,14 +140,14 @@ class EnterpriseAiApplicationIT {
                     .withPassword("synthetic_test_password");
 
     @Container
-    static final GenericContainer<?> MINIO =
-            new GenericContainer<>(MINIO_IMAGE)
-                    .withEnv("MINIO_ROOT_USER", MINIO_ACCESS_KEY)
-                    .withEnv("MINIO_ROOT_PASSWORD", MINIO_SECRET_KEY)
-                    .withCommand("server", "/data")
+    static final GenericContainer<?> OBJECT_STORAGE =
+            new GenericContainer<>(OBJECT_STORAGE_IMAGE)
+                    .withEnv("RUSTFS_ACCESS_KEY", OBJECT_STORAGE_ACCESS_KEY)
+                    .withEnv("RUSTFS_SECRET_KEY", OBJECT_STORAGE_SECRET_KEY)
+                    .withCommand("/data")
                     .withExposedPorts(9000)
                     .waitingFor(
-                            Wait.forHttp("/minio/health/ready")
+                            Wait.forHttp("/health/ready")
                                     .forPort(9000)
                                     .forStatusCode(200)
                                     .withStartupTimeout(Duration.ofSeconds(60)));
@@ -167,11 +167,15 @@ class EnterpriseAiApplicationIT {
         registry.add("app.identity.audience", () -> AUDIENCE);
         registry.add(
                 "app.storage.endpoint",
-                () -> "http://" + MINIO.getHost() + ":" + MINIO.getMappedPort(9000));
+                () ->
+                        "http://"
+                                + OBJECT_STORAGE.getHost()
+                                + ":"
+                                + OBJECT_STORAGE.getMappedPort(9000));
         registry.add("app.storage.region", () -> "us-east-1");
         registry.add("app.storage.bucket", () -> DOCUMENT_BUCKET);
-        registry.add("app.storage.access-key", () -> MINIO_ACCESS_KEY);
-        registry.add("app.storage.secret-key", () -> MINIO_SECRET_KEY);
+        registry.add("app.storage.access-key", () -> OBJECT_STORAGE_ACCESS_KEY);
+        registry.add("app.storage.secret-key", () -> OBJECT_STORAGE_SECRET_KEY);
         registry.add("app.storage.path-style-access", () -> true);
     }
 
@@ -229,7 +233,7 @@ class EnterpriseAiApplicationIT {
     }
 
     @Test
-    void objectStorageUsesOpaqueKeysAndRoundTripsBytesThroughMinio() throws Exception {
+    void objectStorageUsesOpaqueKeysAndRoundTripsBytesThroughObjectStorage() throws Exception {
         byte[] source = "storage-boundary".getBytes(StandardCharsets.UTF_8);
         String objectKey =
                 documentObjectKeyFactory.create(
