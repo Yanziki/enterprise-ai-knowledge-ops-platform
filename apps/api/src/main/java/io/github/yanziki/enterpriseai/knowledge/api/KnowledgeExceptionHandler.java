@@ -4,6 +4,7 @@ import io.github.yanziki.enterpriseai.answer.CitationValidationException;
 import io.github.yanziki.enterpriseai.answer.LanguageModelException;
 import io.github.yanziki.enterpriseai.knowledge.storage.ObjectStorageException;
 import io.github.yanziki.enterpriseai.knowledge.storage.UploadLimitExceededException;
+import io.github.yanziki.enterpriseai.retrieval.indexing.RetrievalIndexingException;
 import io.github.yanziki.enterpriseai.workflow.review.ReviewCaseConflictException;
 import java.time.Instant;
 import org.springframework.http.HttpStatus;
@@ -60,6 +61,14 @@ public class KnowledgeExceptionHandler {
                 HttpStatus.SERVICE_UNAVAILABLE,
                 "ANSWER_PROVIDER_FAILURE",
                 "Answer generation is temporarily unavailable");
+    }
+
+    @ExceptionHandler(RetrievalIndexingException.class)
+    ResponseEntity<ErrorResponse> handleEmbeddingFailure(RetrievalIndexingException exception) {
+        return response(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "EMBEDDING_PROVIDER_FAILURE",
+                "Semantic search is temporarily unavailable");
     }
 
     @ExceptionHandler(ReviewCaseConflictException.class)

@@ -61,6 +61,13 @@ app:
     candidate-limit: ${RETRIEVAL_CANDIDATE_LIMIT:50}
     embedding-batch-size: ${RETRIEVAL_EMBEDDING_BATCH_SIZE:32}
     embedding-mode: ${RETRIEVAL_EMBEDDING_MODE:none}
+    openai:
+      base-url: ${RETRIEVAL_OPENAI_BASE_URL:https://api.openai.com/v1/}
+      model: ${RETRIEVAL_OPENAI_MODEL:}
+      api-key: ${RETRIEVAL_OPENAI_API_KEY:}
+      dimension: ${RETRIEVAL_OPENAI_DIMENSION:0}
+      send-dimensions: ${RETRIEVAL_OPENAI_SEND_DIMENSIONS:false}
+      timeout-millis: ${RETRIEVAL_OPENAI_TIMEOUT_MILLIS:30000}
   answer:
     provider: ${ANSWER_PROVIDER:none}
     max-question-characters: ${ANSWER_MAX_QUESTION_CHARACTERS:2000}

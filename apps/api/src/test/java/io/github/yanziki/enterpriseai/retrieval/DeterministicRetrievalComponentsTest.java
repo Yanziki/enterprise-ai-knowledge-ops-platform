@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 class DeterministicRetrievalComponentsTest {
 
     private static final RetrievalProperties PROPERTIES =
-            new RetrievalProperties(100, 20, 10, 750, 4, 2, 300, 2000, 20, 50, 32, "none");
+            new RetrievalProperties(100, 20, 10, 750, 4, 2, 300, 2000, 20, 50, 32, "none", null);
 
     @Test
     void chunkingIsDeterministicAndPreservesSourceBoundaries() {
